@@ -89,6 +89,7 @@ if __name__ == '__main__':
     
     runner = Runner(algo_observer)
     # runner = Runner()
+    
     runner.load(rlgames_cfg)
     runner.reset()
     runner.run(vargs)
