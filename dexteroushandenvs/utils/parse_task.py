@@ -13,6 +13,8 @@ from tasks.block_assembly.allegro_hand_block_assembly_insert import BlockAssembl
 from tasks.block_assembly.allegro_hand_block_assembly_orient_once import BlockAssemblyOrientOnce
 from tasks.block_assembly.allegro_hand_block_assembly_orient import BlockAssemblyOrient
 from tasks.block_assembly.allegro_hand_block_assembly_search import BlockAssemblySearch
+from tasks.Assembly.ur5e_assembly import Ur5eAssembly
+
 
 from tasks.tool_positioning.allegro_hand_tool_positioning_chain import ToolPositioningChain
 from tasks.tool_positioning.allegro_hand_tool_positioning_chain_pure_rl import ToolPositioningChainPureRL
@@ -28,6 +30,8 @@ from tasks.hand_base.vec_task_rlgames import RLgamesVecTaskPython
 from tasks.hand_base.imitation_vec_task import ImitationVecTaskPython
 from tasks.hand_base.vec_task_lego import LegoVecTaskPython
 from tasks.hand_base.multi_vec_task_allegro import MultiVecTaskPythonAllegro
+
+
 
 from utils.config import warn_task_name
 

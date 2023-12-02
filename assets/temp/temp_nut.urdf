@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+        <robot name="model.urdf">
+            
+        <material name="Gray">
+            <color rgba="0.6 0.6 0.6 1.0"/>
+        </material>
+            
+            <link name="base_nut_link"/>
+            
+            <link concave="no" name="link_top">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.021827087659196668 0.021827087659196668 0.04784606701711146" />
+                </geometry>
+                <material name="Gray"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.021827087659196668 0.021827087659196668 0.04784606701711146"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <link concave="no" name="link_bot">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.018389862834683465 0.018389862834683465 0.02348331113893505" />
+                </geometry>
+                <material name="Gray"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.018389862834683465 0.018389862834683465 0.02348331113893505"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <joint name="top_joint" type="fixed">
+                <parent link="base_nut_link"/>
+                <child link="link_top"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+            
+            <joint name="bot_joint" type="fixed">
+                <parent link="base_nut_link"/>
+                <child link="link_bot"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+        </robot>
+        

@@ -1,0 +1,123 @@
+<?xml version="1.0" ?>
+        <robot name="model.urdf">
+            
+        <material name="yellow">
+            <color rgba="0.85 0.65 0.125 1"/>
+        </material>
+            
+            
+        <material name="black">
+            <color rgba="0 0 0 1"/>
+        </material>
+            
+            <link name="base_screw_link"/>
+            
+            <link concave="no" name="screw_top_link">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.5235987020751401"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.01915297685006264 0.01915297685006264 0.14116248176555524" />
+                </geometry>
+                <material name="yellow"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.5235987020751401"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.01915297685006264 0.01915297685006264 0.14116248176555524"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <link concave="no" name="screw_bot_link">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137" />
+                </geometry>
+                <material name="yellow"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <link concave="no" name="screw_plastic_link">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137" />
+                </geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <link concave="no" name="screw_ring_link">
+            <inertial>
+                <density value="1000"/>
+            </inertial>
+            <visual>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137" />
+                </geometry>
+                <material name="black"/>
+            </visual>
+            <collision>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+                <geometry>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.01986051667265046 0.01986051667265046 0.07300638839509137"/>
+                </geometry>
+            </collision>
+            </link>
+        
+            
+            <joint name="top_joint" type="fixed">
+                <parent link="base_screw_link"/>
+                <child link="screw_top_link"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+            
+            <joint name="bot_joint" type="fixed">
+                <parent link="base_screw_link"/>
+                <child link="screw_bot_link"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+            
+            <joint name="plastic_joint" type="fixed">
+                <parent link="base_screw_link"/>
+                <child link="screw_plastic_link"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+            
+            <joint name="ring_joint" type="fixed">
+                <parent link="base_screw_link"/>
+                <child link="screw_ring_link"/>
+                <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
+            </joint>
+        
+        </robot>
+        

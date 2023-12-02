@@ -51,6 +51,9 @@ from einops import rearrange
 import pickle
 import time
 
+
+
+
 class BlockAssemblySearch(BaseTask):
 
     def __init__(self, cfg, sim_params, physics_engine, device_type, device_id, headless, agent_index=[[[0, 1, 2, 3, 4, 5]], [[0, 1, 2, 3, 4, 5]]], is_multi_agent=False):
@@ -209,6 +212,7 @@ class BlockAssemblySearch(BaseTask):
 
         self.arm_hand_default_dof_pos[7:] = to_torch([0.0, -0.174, 0.785, 0.785,
                                             0.0, -0.174, 0.785, 0.785, 0.0, -0.174, 0.785, 0.785, 0.0, -0.174, 0.785, 0.785], dtype=torch.float, device=self.device)
+
 
         self.arm_hand_prepare_dof_poses = torch.zeros((self.num_envs, self.num_arm_hand_dofs), dtype=torch.float, device=self.device)
         self.end_effector_rotation = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
