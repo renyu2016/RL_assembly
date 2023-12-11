@@ -797,4 +797,13 @@
     <mimic joint="finger_joint" multiplier="1" offset="0"/>
   </joint>
 
+  <!-- <joint name="passive_finger_joint" type="revolute">
+    <origin rpy="0 0.4153883619746504 0" xyz="-0.039748 0.004784 0.037968"/>
+    <parent link="right_inner_knuckle"/>
+    <child link="right_inner_finger"/>
+    <axis xyz="0.0 0.999949 -0.010122"/>
+    <limit effort="50.0" lower="-1.19" upper="0.01" velocity="2.0"/>
+    <mimic joint="finger_joint" multiplier="-1" offset="0"/>
+  </joint> -->
+
 </robot>

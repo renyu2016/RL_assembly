@@ -14,14 +14,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005000000000000001 0.1 0.03743435349306267" />
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.016094656297717863 0.1 0.02909128158557557" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005000000000000001 0.1 0.03743435349306267"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.016094656297717863 0.1 0.02909128158557557"/>
                 </geometry>
             </collision>
             </link>
@@ -34,14 +34,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005000000000000001 0.1 0.03743435349306267" />
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.016094656297717863 0.1 0.02909128158557557" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005000000000000001 0.1 0.03743435349306267"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.016094656297717863 0.1 0.02909128158557557"/>
                 </geometry>
             </collision>
             </link>
@@ -54,14 +54,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.08141064256569644" />
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.04598022661269167" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.08141064256569644"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.04598022661269167"/>
                 </geometry>
             </collision>
             </link>
@@ -74,14 +74,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.08141064256569644" />
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.04598022661269167" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.08141064256569644"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/fixture_box.obj" scale="0.005 0.1 0.04598022661269167"/>
                 </geometry>
             </collision>
             </link>
@@ -90,28 +90,28 @@
             <joint name="joint_1" type="fixed">
                 <parent link="base_link"/>
                 <child link="link_1"/>
-                <origin xyz="0.0069250018052016225 0 0.018717176746531335" rpy="0.0 0.0 0.0"/>
+                <origin xyz="0.017118944284338168 0 0.014545640792787785" rpy="0.0 0.0 0.0"/>
             </joint>
         
             
             <joint name="joint_2" type="fixed">
                 <parent link="base_link"/>
                 <child link="link_2"/>
-                <origin xyz="-0.0069250018052016225 0 0.018717176746531335" rpy="0.0 0.0 0.0"/>
+                <origin xyz="-0.017118944284338168 0 0.014545640792787785" rpy="0.0 0.0 0.0"/>
             </joint>
         
             
             <joint name="joint_3" type="fixed">
                 <parent link="base_link"/>
                 <child link="link_3"/>
-                <origin xyz="0.011925001805201623 0 0.04070532128284822" rpy="0.0 0.0 0.0"/>
+                <origin xyz="0.0276662724331971 0 0.022990113306345834" rpy="0.0 0.0 0.0"/>
             </joint>
         
             
             <joint name="joint_4" type="fixed">
                 <parent link="base_link"/>
                 <child link="link_4"/>
-                <origin xyz="-0.011925001805201623 0 0.04070532128284822" rpy="0.0 0.0 0.0"/>
+                <origin xyz="-0.0276662724331971 0 0.022990113306345834" rpy="0.0 0.0 0.0"/>
             </joint>
         
         </robot>
