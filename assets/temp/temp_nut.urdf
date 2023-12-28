@@ -9,19 +9,19 @@
             
             <link concave="no" name="link_top">
             <inertial>
-                <density value="1000"/>
+                <density value="100"/>
             </inertial>
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.0417054310965338 0.0417054310965338 0.021383815526490334" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.03999468771310285 0.03999468771310285 0.01960414078054761" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.0417054310965338 0.0417054310965338 0.021383815526490334"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.03999468771310285 0.03999468771310285 0.01960414078054761"/>
                 </geometry>
             </collision>
             </link>
@@ -29,19 +29,19 @@
             
             <link concave="no" name="link_bot">
             <inertial>
-                <density value="1000"/>
+                <density value="100"/>
             </inertial>
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.01908651606945206 0.01908651606945206 0.017250545655106454" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.04325716030211772 0.04325716030211772 0.01657852833430404" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.01908651606945206 0.01908651606945206 0.017250545655106454"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.04325716030211772 0.04325716030211772 0.01657852833430404"/>
                 </geometry>
             </collision>
             </link>

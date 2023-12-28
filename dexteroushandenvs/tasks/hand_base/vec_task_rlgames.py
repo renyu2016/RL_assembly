@@ -15,7 +15,7 @@ import numpy as np
 
 # VecEnv Wrapper for RL training
 class VecTask():
-    def __init__(self, task, rl_device, clip_observations=5.0, clip_actions=1.0):
+    def __init__(self, task, rl_device, clip_observations=5.0, clip_actions=np.Inf):
         self.task = task
 
         self.num_environments = task.num_envs

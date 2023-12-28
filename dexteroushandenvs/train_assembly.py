@@ -18,6 +18,8 @@ from utils.process_mtrl import *
 from utils.process_metarl import *
 import os
 
+import sys
+sys.path.append("/mnt/data/pyCharm-project/Reinforcement_Learning/RL_assembly")
 from rl_games.common import env_configurations, experiment, vecenv
 from rl_games.common.algo_observer import AlgoObserver
 from rl_games.torch_runner import Runner
@@ -92,4 +94,6 @@ if __name__ == '__main__':
 
     runner.load(rlgames_cfg)
     runner.reset()
+    # agent = runner.algo_factory.create(runner.algo_name, base_name='run', params=runner.params)
+
     runner.run(vargs)

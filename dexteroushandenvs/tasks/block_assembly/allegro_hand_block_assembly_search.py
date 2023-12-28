@@ -130,7 +130,7 @@ class BlockAssemblySearch(BaseTask):
         }
 
         # can be "full_no_vel", "full", "full_state"
-        self.obs_type = self.cfg["env"]["observationType"]
+        self.obs_type = "partial_contact"#self.cfg["env"]["observationType"]
 
         if not (self.obs_type in ["full_no_vel", "full", "full_state", "full_contact", "partial_contact"]):
             raise Exception(

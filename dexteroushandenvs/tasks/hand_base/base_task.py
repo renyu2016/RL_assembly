@@ -4,7 +4,6 @@
 # and any modifications thereto.  Any use, reproduction, disclosure or
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
-
 import sys
 import os
 import operator
@@ -56,8 +55,8 @@ class BaseTask():
         # allocate buffers
         self.obs_buf = torch.zeros(
             (self.num_envs, self.num_obs), device=self.device, dtype=torch.float)
-        self.states_buf = torch.zeros(
-            (self.num_envs, self.num_states), device=self.device, dtype=torch.float)
+        # self.states_buf = torch.zeros(
+        #     (self.num_envs, self.num_states), device=self.device, dtype=torch.float)
         self.rew_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.float)
         self.reset_buf = torch.ones(

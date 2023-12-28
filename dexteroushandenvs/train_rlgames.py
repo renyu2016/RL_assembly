@@ -17,6 +17,7 @@ from utils.process_marl import process_MultiAgentRL, get_AgentIndex
 from utils.process_mtrl import *
 from utils.process_metarl import *
 import os
+import sys
 
 from rl_games.common import env_configurations, experiment, vecenv
 from rl_games.common.algo_observer import AlgoObserver

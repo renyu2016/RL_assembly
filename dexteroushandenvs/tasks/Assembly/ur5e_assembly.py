@@ -54,6 +54,7 @@ import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 from scipy.interpolate import interp1d
 import math
+import copy
 
 
 def orientation_error(desired, current):
@@ -220,7 +221,7 @@ class Ur5eAssembly(BaseTask):
         self.debug_viz = self.cfg["env"]["enableDebugVis"]
 
         self.max_episode_length = self.cfg["env"]["episodeLength"]
-        self.reset_time = self.cfg["env"].get("resetTime", -1.0)
+        self.reset_time = self.cfg["env"].get("resetTime", -1)
         self.print_success_stat = self.cfg["env"]["printNumSuccesses"]
         self.max_consecutive_successes = self.cfg["env"]["maxConsecutiveSuccesses"]
         self.av_factor = self.cfg["env"].get("averFactor", 0.1)
@@ -247,7 +248,7 @@ class Ur5eAssembly(BaseTask):
         # can be "full_no_vel", "full", "full_state"
         self.obs_type = self.cfg["env"]["observationType"]
 
-        if not (self.obs_type in ["full_no_vel", "full", "full_state", "full_contact", "partial_contact"]):
+        if not (self.obs_type in ["full_no_vel", "full", "full_state", "full_contact", "partial_contact", "assembly"]):
             raise Exception(
                 "Unknown type of observations!\nobservationType should be one of: [openai, full_no_vel, full, full_state]")
 
@@ -266,13 +267,15 @@ class Ur5eAssembly(BaseTask):
         
         ####
         self.stack_obs = 3
+        
 
         self.num_obs_dict = {
             "full_no_vel": 50,
             "full": 72,
             "full_state": 88,
             "full_contact": 90,
-            "partial_contact": 62
+            "partial_contact": 62,
+            "assembly": 20
         }
         self.up_axis = 'z'
 
@@ -282,13 +285,13 @@ class Ur5eAssembly(BaseTask):
 
         num_states = 0
         if self.asymmetric_obs:
-            num_states = 188
+            num_states = 21
 
         self.one_frame_num_obs = self.num_obs_dict[self.obs_type]
         self.one_frame_num_states = num_states
         self.cfg["env"]["numObservations"] = self.num_obs_dict[self.obs_type] * self.stack_obs
-        self.cfg["env"]["numStates"] = num_states * self.stack_obs
-        self.cfg["env"]["numActions"] = 23
+        self.cfg["env"]["numStates"] = num_states #* self.stack_obs
+        self.cfg["env"]["numActions"] = 3
 
         self.cfg["device_type"] = device_type
         self.cfg["device_id"] = device_id
@@ -298,6 +301,7 @@ class Ur5eAssembly(BaseTask):
 
         super().__init__(cfg=self.cfg, enable_camera_sensors=self.enable_camera_sensors)
         self.dt = self.sim_params.dt
+        self.control_ik = False
         # while True:
         #     self.render()
         #     self.gym.simulate(self.sim)
@@ -313,23 +317,26 @@ class Ur5eAssembly(BaseTask):
             self.gym.viewer_camera_look_at(self.viewer, self.env_handles[4], cam_pos, cam_target)
 
         # get gym GPU state tensors
+        self.gym.refresh_actor_root_state_tensor(self.sim)
         actor_root_state_tensor = self.gym.acquire_actor_root_state_tensor(self.sim)
+        readonly_actor_rootstate = self.gym.acquire_actor_root_state_tensor(self.sim)
         dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
         rigid_body_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
         contact_tensor = self.gym.acquire_net_contact_force_tensor(self.sim)
         self.jacobian_tensor = gymtorch.wrap_tensor(self.gym.acquire_jacobian_tensor(self.sim, "hand"))
+        _massmatrix = self.gym.acquire_mass_matrix_tensor(self.sim, "hand")
+        mm = gymtorch.wrap_tensor(_massmatrix)
+        mm = mm[:, :7, :7]
 
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_mass_matrix_tensors(self.sim)
 
         # create some wrapper tensors for different slices
         self.arm_hand_default_dof_pos = torch.zeros(self.num_arm_hand_dofs, dtype=torch.float, device=self.device)
-        finger_v = 1.18
-        #self.arm_hand_default_dof_pos[:] = torch.tensor([1.5707963, -1.5707963, -1.5707963, -1.5707963, 1.5707963,  0, finger_v, -finger_v, -finger_v, -finger_v, -finger_v, finger_v], dtype=torch.float, device=self.device)        
-        self.arm_hand_default_dof_pos[:] = torch.tensor([0.0, -0.49826458111314524, -0.01990020486871322, 2.032269941140346, -0.01307073642274261, 1.5, -0.2617, 0.03, 0.03], dtype=torch.float, device=self.device) 
-        self.arm_hand_prepare_dof_poses = torch.zeros((self.num_envs, self.num_arm_hand_dofs), dtype=torch.float, device=self.device)
+        self.arm_hand_default_dof_pos[:] = torch.tensor([0.0, 0.52, 0.0, 1.04, 0.0, 1.57, 0.2617, 0.00, 0.00], dtype=torch.float, device=self.device) 
         self.end_effector_rotation = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
 
         self.arm_hand_prepare_dof_pos_list = []
@@ -366,16 +373,38 @@ class Ur5eAssembly(BaseTask):
         self.arm_hand_dof_pos = self.arm_hand_dof_state[..., 0]
         self.arm_hand_dof_vel = self.arm_hand_dof_state[..., 1]
 
-        self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor).view(self.num_envs, -1, 13)
+        self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor)
         self.num_bodies = self.rigid_body_states.shape[1]
 
         self.root_state_tensor = gymtorch.wrap_tensor(actor_root_state_tensor).view(-1, 13)
+        self.init_state_tensor = np.array(self.root_state_tensor.cpu())
+
+        self.readonly_rootstate_tensor = gymtorch.wrap_tensor(readonly_actor_rootstate).view(-1, 13)
 
         self.contact_tensor = gymtorch.wrap_tensor(contact_tensor).view(self.num_envs, -1)
         print("Contact Tensor Dimension", self.contact_tensor.shape)
 
+        joint_effort = self.gym.acquire_dof_force_tensor(self.sim)
+        self.joint_eff_data = gymtorch.wrap_tensor(joint_effort).view(self.num_envs, -1)
+
         self.num_dofs = self.gym.get_sim_dof_count(self.sim) // self.num_envs
         print("Num dofs: ", self.num_dofs) 
+
+        self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.hand_indices[0], "dh_gripper_link", gymapi.DOMAIN_ENV)
+        print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
+        #*******************Osc control related parameters**************************************
+        kp = 150
+        kp_null = 10
+        dof_pos = self.arm_hand_dof_pos.view(self.num_envs, 9, 1)
+        dof_vel = self.arm_hand_dof_vel.view(self.num_envs, 9, 1)
+        hand_vel = self.rigid_body_states[self.rg2_indices, 7:]
+        self.control_param = {'kp':kp, 'kd':2* np.sqrt(kp), 'kp_null': kp_null, "kd_null":2 * np.sqrt(kp_null),
+                              'default_dof_pos_tensor': self.arm_hand_default_dof_pos, 'mm':mm, 'j_eef':self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7],
+                              'dof_pos':dof_pos, 'dof_vel':dof_vel, 'hand_vel':hand_vel}
+        self.next_p = None
+        self.control_pose = torch.zeros([self.num_envs, 9]).to(self.device)
+        self.robot_state = torch.zeros([self.num_envs, 7])
+
 
         activate_num = 7
         self.prev_targets = torch.zeros((self.num_envs, self.num_arm_hand_dofs), dtype=torch.float, device=self.device)
@@ -399,9 +428,36 @@ class Ur5eAssembly(BaseTask):
         self.reset_goal_buf = self.reset_buf.clone()
         self.record_completion_time = False
 
-        self.hand_base_rigid_body_index = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.hand_indices[0], "dh_gripper_link", gymapi.DOMAIN_ENV)
-        print("hand_base_rigid_body_index: ", self.hand_base_rigid_body_index)
+        self.obs_buf_stack_frames = []
+        for i in range(self.stack_obs):
+            self.obs_buf_stack_frames.append(torch.zeros_like(self.obs_buf[:, 0:self.one_frame_num_obs]))
+       
 
+        self.des_gripper_nut = torch.zeros([self.num_envs, 7]).to(self.device)
+        self.alpha = 0.4
+        self.des_nut_fixture = torch.zeros([self.num_envs, 7]).to(self.device)
+        self.des_nut_pose = torch.zeros_like(self.des_nut_fixture)
+        self.beta = 0.4
+        self.gama = 0.2
+        self.reset_buf = torch.ones(self.num_envs, device=self.device, dtype=torch.long)
+        self.exter_f_pre = torch.zeros([self.num_envs, 6, 1], device=self.device)
+        self.path_step_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.meta_rew_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.float)
+        self.states_buf = torch.zeros((self.num_envs, self.num_states), device=self.device, dtype=torch.float)
+        self.gripper_nut_pose = torch.zeros((self.num_envs, 7), device=self.device, dtype=torch.float)
+        self.nut_fixture_pose = torch.zeros((self.num_envs, 7), device=self.device, dtype=torch.float)
+        self.gripper_fixture_pose = torch.zeros((self.num_envs, 7), device=self.device, dtype=torch.float)
+        self.reward_settings = {
+            "r_dist_scale": 0.1,
+            "r_lift_scale": 1.5,
+            "r_stack_scale": 10000,
+            "action_scale" : -0.5
+        }
+        self.part_nut_bl = torch.zeros(self.num_envs).to(self.device)
+        self.finished_num = 0
+        self.finished_reward = 0
+        self.fixture_pose = torch.zeros(self.num_envs, 7).to(self.device)
+        self.noisy_fixture_pose = torch.zeros(self.num_envs, 7).to(self.device)
 
 
     def create_sim(self):
@@ -449,6 +505,14 @@ class Ur5eAssembly(BaseTask):
             asset_options.use_physx_armature = True
         arm_hand_asset = self.gym.load_asset(self.sim, asset_root, arm_hand_asset_file, asset_options)
 
+        wrist_idx = self.gym.find_asset_rigid_body_index(arm_hand_asset, "dh_gripper_link")
+        sensor_pose = gymapi.Transform(gymapi.Vec3(0.0, 0.0, -0.01))
+        sensor_props = gymapi.ForceSensorProperties()
+        sensor_props.enable_forward_dynamics_forces = False
+        sensor_props.enable_constraint_solver_forces = False
+        sensor_props.use_world_frame = True
+        sensor_idx1 = self.gym.create_asset_force_sensor(arm_hand_asset, wrist_idx, sensor_pose, sensor_props)
+
         self.num_arm_hand_bodies = self.gym.get_asset_rigid_body_count(arm_hand_asset)
         self.num_arm_hand_shapes = self.gym.get_asset_rigid_shape_count(arm_hand_asset)
         self.num_arm_hand_dofs = self.gym.get_asset_dof_count(arm_hand_asset)
@@ -470,21 +534,25 @@ class Ur5eAssembly(BaseTask):
         robot_upper_qpos = []
 
         robot_dof_props = self.gym.get_asset_dof_properties(arm_hand_asset)
-
+        
         for i in range(self.num_arm_hand_dofs):
-            robot_dof_props['driveMode'][i] = gymapi.DOF_MODE_POS
             if i < 7:
-                robot_dof_props['stiffness'][i] = 400
-                robot_dof_props['effort'][i] = 200
-                robot_dof_props['damping'][i] = 150
+                robot_dof_props['driveMode'][i] = gymapi.DOF_MODE_EFFORT
+                robot_dof_props['stiffness'][i] = 0
+                robot_dof_props['damping'][i] = 0
             else:
-                # robot_dof_props['velocity'][i] = 10.0
-                # robot_dof_props['effort'][i] = 0.7
-                robot_dof_props['stiffness'][i] = 800
-                robot_dof_props['damping'][i] = 150
+                robot_dof_props["driveMode"][i] = gymapi.DOF_MODE_POS
+                robot_dof_props['stiffness'][i] = 7000.0
+                robot_dof_props['damping'][i] = 50.0
             robot_lower_qpos.append(robot_dof_props['lower'][i])
             robot_upper_qpos.append(robot_dof_props['upper'][i])
         
+        robot_rigid_prpos = self.gym.get_asset_rigid_shape_properties(arm_hand_asset)
+        for object_shape_prop in robot_rigid_prpos:
+            object_shape_prop.friction = 10
+        self.gym.set_asset_rigid_shape_properties(arm_hand_asset, robot_rigid_prpos)
+
+
         self.actuated_dof_indices = to_torch(self.actuated_dof_indices, dtype=torch.long, device=self.device)
         self.arm_hand_dof_lower_limits = to_torch(robot_lower_qpos, device=self.device)
         self.arm_hand_dof_upper_limits = to_torch(robot_upper_qpos, device=self.device)
@@ -525,7 +593,7 @@ class Ur5eAssembly(BaseTask):
 
         box_thin = 0.01
         box_xyz = [0.60, 0.416, 0.165]
-        box_offset = [0.25, -0.8, 0]
+        box_offset = [0.25, 0.00, 0]
 
         box_asset_options = gymapi.AssetOptions()
         box_asset_options.disable_gravity = False
@@ -575,14 +643,16 @@ class Ur5eAssembly(BaseTask):
         self.rg2_indices = []
         self.rg2_init_poses = []
         self.rg2_init_orn = []
+        self.finger_idxs = []
+        self.nut_idxs = []
+        self.nut_body_idxs = []
 
-        
-
-        ins_num = 2
+        ins_num = 1
         self.ins_num = ins_num
         self.fixture_indices = np.zeros([self.num_envs, self.ins_num])
         self.screw_indices = np.zeros([self.num_envs, self.ins_num])
         self.nut_indices = np.zeros([self.num_envs, self.ins_num])
+        self.nut_rigid_indices = np.zeros([self.num_envs, self.ins_num])
 
         param_tab, default_param =  self.prepar_random_parmtable(self.num_envs, ins_num)
         self.part_param = param_tab
@@ -602,6 +672,8 @@ class Ur5eAssembly(BaseTask):
 
             # ****************add hand - collision filter = -1 to use asset collision filters set in mjcf loader
             arm_hand_actor = self.gym.create_actor(env_ptr, arm_hand_asset, arm_hand_start_pose, "hand", i, 0, 0)
+            # self.force_sensor = self.gym.get_actor_force_sensor(env_ptr, arm_hand_actor, 0)
+            self.gym.enable_actor_dof_force_sensors(env_ptr, arm_hand_actor)
             self.arm_handles.append(arm_hand_actor)
             self.hand_start_states.append([arm_hand_start_pose.p.x,
                                             arm_hand_start_pose.p.y,
@@ -619,6 +691,9 @@ class Ur5eAssembly(BaseTask):
             # Get global index of hand in rigid body state tensor
             rg2_idx = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "dh_gripper_link", gymapi.DOMAIN_SIM)
             self.rg2_indices.append(rg2_idx)
+
+            finger_idx = self.gym.find_actor_rigid_body_index(env_ptr, arm_hand_actor, "dh_finger1_link", gymapi.DOMAIN_SIM)
+            self.finger_idxs.append(finger_idx)
             #***********************endding add hand
 
             #*****************adding table*****************************************
@@ -639,20 +714,20 @@ class Ur5eAssembly(BaseTask):
 
             ##********************add box
 
-            for box_i, box_asset in enumerate(box_assets):
-                box_handle = self.gym.create_actor(env_ptr, box_asset, box_start_poses[box_i], "box_{}".format(box_i), i, 0, 0)
-                # self.lego_init_state.append([lego_init_state.p.x, lego_init_state.p.y, object_start_pose.p.z,
-                #                             lego_init_state.r.x, lego_init_state.r.y, object_start_pose.r.z, object_start_pose.r.w,
-                #                             0, 0, 0, 0, 0, 0])
-                # object_idx = self.gym.get_actor_index(env_ptr, object_handle, gymapi.DOMAIN_SIM)
-                # self.object_indices.append(object_idx)
-                # self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.4, 0))
-                self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
+            # for box_i, box_asset in enumerate(box_assets):
+            #     box_handle = self.gym.create_actor(env_ptr, box_asset, box_start_poses[box_i], "box_{}".format(box_i), i, 0, 0)
+            #     # self.lego_init_state.append([lego_init_state.p.x, lego_init_state.p.y, object_start_pose.p.z,
+            #     #                             lego_init_state.r.x, lego_init_state.r.y, object_start_pose.r.z, object_start_pose.r.w,
+            #     #                             0, 0, 0, 0, 0, 0])
+            #     # object_idx = self.gym.get_actor_index(env_ptr, object_handle, gymapi.DOMAIN_SIM)
+            #     # self.object_indices.append(object_idx)
+            #     # self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.8, 0.4, 0))
+            #     self.gym.set_rigid_body_color(env_ptr, box_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(1, 1, 1))
 
             ##********************end adding box
 
             for n in range(self.ins_num):
-                self.load_manipulated_target(i, n, env_ptr, param_tab)
+                self.load_manipulated_target(i, n, env_ptr, param_tab, box_pose=box_offset)
 
             #load manipulated objects
             # 
@@ -660,12 +735,21 @@ class Ur5eAssembly(BaseTask):
         self.fixture_indices = to_torch(self.fixture_indices, dtype=torch.long, device=self.device)
         self.screw_indices = to_torch(self.screw_indices, dtype=torch.long, device=self.device)
         self.nut_indices = to_torch(self.nut_indices, dtype=torch.long, device=self.device)
-
+        self.nut_rigid_indices = to_torch(self.nut_rigid_indices, dtype=torch.long, device=self.device)
+        self.finger_idxs = to_torch(self.finger_idxs, dtype=torch.long, device=self.device)
+        self.nut_body_idxs = to_torch(self.nut_body_idxs, dtype=torch.long, device=self.device)
+        self.rg2_indices = to_torch(self.rg2_indices, dtype=torch.long, device=self.device)
         #*****control related parameters
         self.path_step = 0
         self.control_step = 0
         self.path_point = []
-
+        self.paths = None
+        self.cur_fixture_idx = torch.zeros([self.num_envs]).to(torch.int32).to(self.device)
+        self.cur_nut_idx = torch.zeros([self.num_envs]).to(torch.int32).to(self.device)
+        
+        
+        # self.reset_hand(to_torch(range(32)))
+        print("finish reset_hand")
 
 
 
@@ -898,10 +982,10 @@ class Ur5eAssembly(BaseTask):
             """
         
         nut_top_mesh = mesh_dir + "/Nut_top.obj"
-        link_top = self.get_link_standra("link_top", nut_top_mesh, 1000, "Gray", xyz=params["top_refpos"], scale=params["top_scale"])
+        link_top = self.get_link_standra("link_top", nut_top_mesh, 100, "Gray", xyz=params["top_refpos"], scale=params["top_scale"])
 
         nut_bot_mesh = mesh_dir + "/Nut_bottom.obj"
-        link_bot = self.get_link_standra("link_bot", nut_bot_mesh, 1000, "Gray", xyz=params["bottom_refpose"], scale=params["bottom_scale"])
+        link_bot = self.get_link_standra("link_bot", nut_bot_mesh, 100, "Gray", xyz=params["bottom_refpose"], scale=params["bottom_scale"])
 
         top_joint = self.get_joint_standra("top_joint", "root", "link_top")
         bot_joint = self.get_joint_standra("bot_joint", "root", "link_bot")
@@ -1069,7 +1153,7 @@ class Ur5eAssembly(BaseTask):
 
         
 
-    def load_manipulated_target(self, env_ind, ins_ind, env_handle,  param_tab):
+    def load_manipulated_target(self, env_ind, ins_ind, env_handle, param_tab, box_pose):
 
         # env_id = to_torch(np.array([5]))
         ##************************load fixture***************************
@@ -1077,8 +1161,8 @@ class Ur5eAssembly(BaseTask):
         fixture_asset_options.disable_gravity = False
         fixture_asset_options.thickness = 0.0001
         fixture_asset_options.default_dof_drive_mode = gymapi.DOF_MODE_NONE
-        fixture_asset_options. collapse_fixed_joints = True
-        fixture_asset_options. override_com = True
+        fixture_asset_options.collapse_fixed_joints = True
+        fixture_asset_options.override_com = True
         fixture_asset_options.fix_base_link = True
 
         asset_pth = "assets/meshes/stutzmontage/visual"
@@ -1087,9 +1171,9 @@ class Ur5eAssembly(BaseTask):
           
         fixture_start_pose = gymapi.Transform()
         if ins_ind % 2 == 0:
-            fixture_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.20, -0.11 + 0.11 * int(ins_ind / 3) -0.8, 0.7 + ins_ind * 0.06)
+            fixture_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.20, -0.11 + 0.11 * int(ins_ind / 3) +box_pose[1], 0.7 + ins_ind * 0.06)
         else:
-            fixture_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.20, 0.11 - 0.11 * int(ins_ind / 3) -0.8, 0.7 + ins_ind * 0.06)
+            fixture_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.20, 0.11 - 0.11 * int(ins_ind / 3) +box_pose[1], 0.7 + ins_ind * 0.06)
         fixture_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.0)
             
         fixture_handle = self.gym.create_actor(env_handle, fixture_asset, fixture_start_pose, "fixture_{}_{}".format(env_ind, ins_ind), env_ind, 0, ins_ind + 1)
@@ -1103,7 +1187,7 @@ class Ur5eAssembly(BaseTask):
         contact_offect = 0.0005
         fixture_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, fixture_handle)
         for object_shape_prop in fixture_shape_props:
-            object_shape_prop.friction = 1
+            object_shape_prop.friction = 0.1
             # object_shape_prop.contact_offset = contact_offect
         self.gym.set_actor_rigid_shape_properties(env_handle, fixture_handle, fixture_shape_props)
 
@@ -1125,9 +1209,9 @@ class Ur5eAssembly(BaseTask):
           
         screw_start_pose = gymapi.Transform()
         if (ins_ind) % 2 == 0:
-            screw_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.30, -0.11 + 0.11 * int(ins_ind / 3) -0.8, 0.8 + ins_ind * 0.06)
+            screw_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.30, -0.11 + 0.11 * int(ins_ind / 3) +box_pose[1], 0.8 + ins_ind * 0.06)
         else:
-            screw_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.30, 0.11 - 0.11 * int(ins_ind / 3) -0.8, 0.8 + ins_ind * 0.06)
+            screw_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.30, 0.11 - 0.11 * int(ins_ind / 3) +box_pose[1], 0.8 + ins_ind * 0.06)
         screw_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.0)
             
         screw_handle = self.gym.create_actor(env_handle, screw_asset, screw_start_pose, "screw_{}_{}".format(env_ind, ins_ind), env_ind, 0, ins_ind + 1)
@@ -1143,7 +1227,7 @@ class Ur5eAssembly(BaseTask):
         # contact_offect = 0.0005
         screw_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, screw_handle)
         for object_shape_prop in screw_shape_props:
-            object_shape_prop.friction = 1
+            object_shape_prop.friction = 500
             # object_shape_prop.contact_offset = contact_offect
         self.gym.set_actor_rigid_shape_properties(env_handle, screw_handle, screw_shape_props)
 
@@ -1165,120 +1249,37 @@ class Ur5eAssembly(BaseTask):
           
         nut_start_pose = gymapi.Transform()
         if (ins_ind) % 2 == 0:
-            nut_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.40, -0.11 + 0.11 * int(ins_ind / 3) -0.8, 0.65)
+            nut_start_pose.p = gymapi.Vec3(-0.1 + 0.1 * int(ins_ind % 3) + 0.40, -0.11 + 0.11 * int(ins_ind / 3) +box_pose[1], 0.65)
         else:
-            nut_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.40, 0.11 - 0.11 * int(ins_ind / 3) -0.8, 0.65)
+            nut_start_pose.p = gymapi.Vec3(0.1 - 0.1 * int(ins_ind % 3) + 0.40, 0.11 - 0.11 * int(ins_ind / 3) +box_pose[1], 0.65)
         nut_start_pose.r = gymapi.Quat().from_euler_zyx(0.0, 0.0, 0.0)
             
         nut_handle = self.gym.create_actor(env_handle, nut_asset, nut_start_pose, "nut_{}_{}".format(env_ind, ins_ind), env_ind, 0, ins_ind + 1)
 
         idx = self.gym.get_actor_index(env_handle, nut_handle, gymapi.DOMAIN_SIM)
+
+        nut_index = self.gym.get_actor_rigid_body_index(env_handle, nut_handle, 0, gymapi.DOMAIN_SIM)
         # self.gym.set_rigid_body_color(
         #         env_handle, screw_handle, 0, gymapi.MESH_VISUAL, gymapi.Vec3(0.5, 0.5, 0.5)
         #     )
-        self.nut_indices[env_ind, ins_ind] = idx
+        # nut_body_idx = self.gym.
+        self.nut_rigid_indices[env_ind, ins_ind] = nut_index
 
+        self.nut_indices[env_ind, ins_ind] = idx
+        
         nut_shape_props = self.gym.get_actor_rigid_shape_properties(env_handle, nut_handle)
         for object_shape_prop in nut_shape_props:
-            object_shape_prop.friction = 1
+            object_shape_prop.friction = 500
             # object_shape_prop.contact_offset = contact_offect
         self.gym.set_actor_rigid_shape_properties(env_handle, nut_handle, nut_shape_props)
-
+        arm_links = self.gym.get_asset_rigid_body_dict(nut_asset)
+        nut_body_idx = self.gym.find_actor_rigid_body_index(env_handle, nut_handle, "root", gymapi.DOMAIN_SIM)
+        
+        self.nut_body_idxs.append(nut_body_idx)
         #***********************************************************ending add nut**************************************88
 
-
-        
-
-
-    def reset_idx(self, env_ids, goal_env_ids):
-        # env_ids = to_torch(np.array([4])).to(torch.int32)
-        
-        if self.record_completion_time:
-            self.end_time = time.time()
-            self.complete_time_list.append(self.end_time - self.last_start_time)
-            self.last_start_time = self.end_time
-            print("complete_time_mean: ", np.array(self.complete_time_list).mean())
-            print("complete_time_std: ", np.array(self.complete_time_list).std())
-            if len(self.complete_time_list) == 25:
-                with open("output_video/search_complete_time.pkl", "wb") as f:
-                    pickle.dump(self.complete_time_list, f)
-                exit()
-
-        if self.randomize:
-            self.apply_randomizations(self.randomization_params)
-
-        # segmentation_object_success_threshold = [100, 100, 75, 100, 100, 150, 150, 100]
-        segmentation_object_success_threshold = [20, 20, 15, 20, 20, 30, 30, 20]
-
-        if self.total_steps > 0:
-            self.record_8_type = [0, 0, 0, 0, 0, 0, 0, 0]
-            for i in range(self.num_envs):
-                object_idx = i % 8
-                if self.segmentation_object_point_num[i] > segmentation_object_success_threshold[object_idx]:
-                    self.record_8_type[object_idx] += 1 
-
-            for i in range(8):
-                self.record_8_type[i] /= (self.num_envs / 8)
-            print("insert_success_rate_index: ", self.record_8_type)
-            print("insert_success_rate: ", sum(self.record_8_type) / 8)
-
-        # save the terminal state
-        if self.total_steps > 0:
-            axis1 = quat_apply(self.segmentation_target_rot, self.z_unit_tensor)
-            axis2 = self.z_unit_tensor
-            dot1 = torch.bmm(axis1.view(self.num_envs, 1, 3), axis2.view(self.num_envs, 3, 1)).squeeze(-1).squeeze(-1)  # alignment of forward axis for gripper
-            lego_z_align_reward = (torch.sign(dot1) * dot1 ** 2)
-
-            self.saved_searching_ternimal_state = self.root_state_tensor.clone()[self.lego_indices.view(-1), :].view(self.num_envs, 132, 13)
-            self.saved_searching_hand_ternimal_state = self.dof_state.clone().view(self.num_envs, -1, 2)[:, :self.num_arm_hand_dofs]
-            for i in range(self.num_envs):
-                object_i = i % 8
-                if self.segmentation_object_point_num[i] > segmentation_object_success_threshold[object_i]:
-                    if lego_z_align_reward[i] < 10.6:
-                        if self.save_hdf5:
-                            if self.use_temporal_tvalue:
-                                self.succ_grp.create_dataset("{}th_success_data".format(self.success_v_count), data=self.t_value_obs_buf[i].cpu().numpy())
-                                
-                            self.success_v_count += 1
-
-                        self.saved_searching_ternimal_states_list[object_i][self.saved_searching_ternimal_states_index_list[object_i]:self.saved_searching_ternimal_states_index_list[object_i] + 1] = self.saved_searching_ternimal_state[i]
-                        self.saved_searching_hand_ternimal_states_list[object_i][self.saved_searching_ternimal_states_index_list[object_i]:self.saved_searching_ternimal_states_index_list[object_i] + 1] = self.saved_searching_hand_ternimal_state[i]
-
-                        self.saved_searching_ternimal_states_index_list[object_i] += 1
-                        if self.saved_searching_ternimal_states_index_list[object_i] > 10000:
-                            self.saved_searching_ternimal_states_index_list[object_i] = 0
-
-                    else:
-                        if self.save_hdf5:
-                            if self.use_temporal_tvalue:
-                                self.fail_grp.create_dataset("{}th_failure_data".format(self.failure_v_count), data=self.t_value_obs_buf[i].cpu().numpy())
-                            else:
-                                self.fail_grp.create_dataset("{}th_failure_data".format(self.failure_v_count), data=self.camera_view_segmentation_target_rot[i].cpu().numpy())
-                            self.failure_v_count += 1
-                else:
-                    if self.save_hdf5:
-                        if self.use_temporal_tvalue:
-                            self.fail_grp.create_dataset("{}th_failure_data".format(self.failure_v_count), data=self.t_value_obs_buf[i].cpu().numpy())
-                        else:
-                            self.fail_grp.create_dataset("{}th_failure_data".format(self.failure_v_count), data=self.camera_view_segmentation_target_rot[i].cpu().numpy())
-                        self.failure_v_count += 1
-
-            for j in range(8):
-                print("saved_searching_ternimal_states_index_{}: ".format(j), self.saved_searching_ternimal_states_index_list[j])
-
-            # if all([i > 5000 for i in self.saved_searching_ternimal_states_index_list]):
-            #     with open("intermediate_state/saved_searching_ternimal_states_medium_mo_tvalue.pkl", "wb") as f:
-            #         pickle.dump(self.saved_searching_ternimal_states_list, f)
-            #     with open("intermediate_state/saved_searching_hand_ternimal_states_medium_mo_tvalue.pkl", "wb") as f:
-            #         pickle.dump(self.saved_searching_hand_ternimal_states_list, f)
-
-            #     print("RECORD SUCCESS!")
-            #     exit()
-        #***************************************reset robotic arm***********************************
-        pos = self.arm_hand_default_dof_pos[:] #+ self.reset_dof_pos_noise * rand_delta
-        # self.arm_hand_dof_pos[env_ids, :] = pos
-        # self.arm_hand_dof_vel[env_ids, :] = self.arm_hand_dof_default_vel #+ \
-        #     #self.reset_dof_vel_noise * rand_floats[:, 5+self.num_arm_hand_dofs:5+self.num_arm_hand_dofs*2]
+    def reset_hand(self, env_ids):
+        pos = self.arm_hand_default_dof_pos[:] 
         self.prev_targets[env_ids, :] = pos
         self.cur_targets[env_ids, :] = pos
 
@@ -1288,10 +1289,6 @@ class Ur5eAssembly(BaseTask):
         dof_state[:, :, 0] = pos
         dof_state = dof_state.view(-1, 2)
 
-        # self.gym.set_dof_position_target_tensor_indexed(self.sim,
-        #                                                 gymtorch.unwrap_tensor(self.prev_targets),
-        #                                                 gymtorch.unwrap_tensor(hand_indices), len(env_ids))
-        # self.dof_state
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(dof_state),
                                               gymtorch.unwrap_tensor(hand_indices), len(env_ids))
@@ -1300,13 +1297,24 @@ class Ur5eAssembly(BaseTask):
                                                         gymtorch.unwrap_tensor(self.prev_targets),
                                                         gymtorch.unwrap_tensor(hand_indices), len(env_ids))
 
-        
-        #***************************************************************end reset robotic arm********************************************#
-        
-        for i in range(20):
-            self.render()
+        for i in range(1):
+            # self.render()
             self.gym.simulate(self.sim)
+
         
+
+       
+        
+
+
+    def reset_idx(self, env_ids, goal_env_ids):
+        if self.randomize:
+            self.apply_randomizations(self.randomization_params)
+
+        #***************************************reset robotic arm***********************************
+        self.reset_hand(env_ids)
+        # #***************************************************************end reset robotic arm********************************************#
+    
         #**************************************************start reset fixture screw and nut**********************************************#
         rand_ins_id = to_torch(np.random.randint(0, 1))
         rand_ins_id = rand_ins_id.to(torch.int32)
@@ -1314,79 +1322,164 @@ class Ur5eAssembly(BaseTask):
         reset_fixture_id = self.fixture_indices[env_ids, rand_ins_id].to(torch.int32)
         reset_screw_id = self.screw_indices[env_ids, rand_ins_id].to(torch.int32)
         reset_nut_id = self.nut_indices[env_ids, rand_ins_id].to(torch.int32)
+        nut_rigid_id = self.nut_rigid_indices[env_ids, rand_ins_id].to(torch.int32)
 
         L = np.array([0.1, 0.1, 1])
-        fixture_base = np.array([-0.45, -0.55, 0.6])
+        fixture_base = np.array([-0.55, -0.45, 0.6])
         rand_value = (np.random.random([len(env_ids), 3]) * np.array([2, 2, 2]) - np.array([1, 1, 1])) * L + fixture_base
         rand_value[:,2] = fixture_base[2]
         fixture_rand_p = to_torch(rand_value)
+        
 
         L = np.array([0.1, 0.1, 1])
-        nut_base = np.array([0, -0.4, 0.6])
+        nut_base = np.array([0, -0.3, 0.6])
         rand_value = (np.random.random([len(env_ids), 3]) * np.array([2, 2, 2]) - np.array([1, 1, 1])) * L + nut_base
         # torch_param = to_torch()
         nut_bL = self.part_param["nut_bottom_length"][env_ids.cpu(), rand_ins_id.cpu()]        
-        rand_value[:,2] =nut_bL + 0.60
+        rand_value[:,2] =nut_bL + 0.605
         nut_rand_p = to_torch(rand_value)
         nut_rot = to_torch(np.ones([len(env_ids), 4]) * np.array([0, 0, 0, 1]))
 
+        nut_top_radius = self.part_param['nut_top_radius'][env_ids.cpu(), rand_ins_id.cpu()]
+
+
         self.root_state_tensor[reset_fixture_id, 0:3] = fixture_rand_p
         self.root_state_tensor[reset_fixture_id, 7:13] = torch.zeros_like(self.root_state_tensor[reset_fixture_id, 7:13])
+        self.fixture_pose[env_ids, 0:3] = fixture_rand_p
+        self.fixture_pose[env_ids, 3:7] = to_torch([0, 0, 0, 1])
+        noise = to_torch((np.random.random([len(env_ids), 3]) -0.5) * 0.02 )
+        self.noisy_fixture_pose[env_ids, 0:3] = fixture_rand_p + noise
+        self.noisy_fixture_pose[env_ids, 3:7] = to_torch([0, 0, 0, 1])
+
+
+
+        self.root_state_tensor[reset_nut_id, 0:3] = nut_rand_p
+        self.root_state_tensor[reset_nut_id, 3:7] = nut_rot
+        self.root_state_tensor[reset_nut_id, 7:13] = to_torch([0,0,0,0,0,0])
+
+        # rigid_body_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
+        # rigid_body_states = gymtorch.wrap_tensor(rigid_body_tensor)
+        # rigid_body_states[nut_rigid_id, :] = self.root_state_tensor[reset_nut_id, :]
+        # self.gym.set_rigid_body_state_tensor(self.sim, gymtorch.unwrap_tensor(rigid_body_states))
+
+        # self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_state_tensor))
+        self.gym.set_actor_root_state_tensor_indexed(self.sim,
+                                                     gymtorch.unwrap_tensor(self.root_state_tensor),
+                                                     gymtorch.unwrap_tensor(torch.cat([reset_fixture_id, reset_nut_id])), len(torch.cat([reset_fixture_id, reset_nut_id])))
+        
+        for i in range(2):
+            self.render()
+            self.gym.simulate(self.sim)
+        
 
         self.root_state_tensor[reset_nut_id, 0:3] = nut_rand_p
         self.root_state_tensor[reset_nut_id, 3:7] = nut_rot
         self.root_state_tensor[reset_nut_id, 7:13] = torch.zeros_like(self.root_state_tensor[reset_nut_id, 7:13])
+        # self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_state_tensor))
 
-        flag = self.gym.set_actor_root_state_tensor_indexed(self.sim,
-                                                     gymtorch.unwrap_tensor(self.root_state_tensor),
-                                                     gymtorch.unwrap_tensor(torch.cat([reset_fixture_id, reset_nut_id])), len(torch.cat([reset_fixture_id, reset_nut_id])))
+        # self.gym.set_actor_root_state_tensor_indexed(self.sim,
+        #                                              gymtorch.unwrap_tensor(self.root_state_tensor),
+        #                                              gymtorch.unwrap_tensor(torch.cat([reset_fixture_id, reset_nut_id])), len(torch.cat([reset_fixture_id, reset_nut_id])))
+        # self.gym.set_actor_root_state_tensor_indexed(self.sim,
+        #                                              gymtorch.unwrap_tensor(self.root_state_tensor),
+        #                                              gymtorch.unwrap_tensor(reset_nut_id), len(reset_nut_id))
         
+        # for i in range(2):
+        #     self.render()
+        #     self.gym.simulate(self.sim)
+        
+
+          
+        
+        
+        self.cur_nut_idx[env_ids] = reset_nut_id
+        self.cur_fixture_idx[env_ids] = reset_fixture_id
+
+        self.des_gripper_nut[env_ids, :] = to_torch([0, 0, 0.202, 0, 1, 0, 0])
+        self.des_nut_fixture[env_ids, :] = to_torch([0, 0, 0, 0, 0, 0, 1])
+        fixture_inner_h = self.part_param["fixture_inner_height"][env_ids.cpu(), rand_ins_id.cpu()] 
+        self.des_nut_fixture[env_ids, 2] = to_torch(fixture_inner_h)
+        
+        self.part_nut_bl[env_ids] = to_torch(self.part_param["nut_bottom_length"][env_ids.cpu(), rand_ins_id.cpu()])
+
+
+        self.des_nut_pose[env_ids, :3] = fixture_rand_p
+        self.des_nut_pose[env_ids, 2] +=  to_torch(fixture_inner_h)
+        self.des_nut_pose[env_ids, 3:7] = to_torch([0, 0, 0, 1])
+        
+        # self.nut_fixture = to_torch([0, 0, ])
+
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_jacobian_tensors(self.sim)
 
-        rg2_idx = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.arm_handles[0], "xMatePro7_link7", gymapi.DOMAIN_SIM)
-        rg2_state = self.rigid_body_states[env_ids, rg2_idx]
+        # rg2_idx = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.arm_handles[0], "xMatePro7_link7", gymapi.DOMAIN_SIM)
         
+        cur_rg2_ids = self.rg2_indices[env_ids]
+        rg2_state = self.rigid_body_states[cur_rg2_ids, :]
         init_pose = rg2_state[:, :9].to(self.device)
-        
-        # init_pose2 = init_pose.clone() 
-        # init_pose2[:, 7:] = 0.03
-
-        # init_pose3 = init_pose2.clone()
-        # init_pose3[:, 7:] = 0
-
-
+        steps = []
+        #above nut 40
+        steps.append(50)
         target_pose = torch.zeros([len(env_ids), 9]).to(self.device)
         target_pose[:, :3] = init_pose[:, :3].clone()
         target_pose[:, 0] = to_torch(nut_rand_p[:, 0]).to(self.device)
         target_pose[:, 1] = to_torch(nut_rand_p[:, 1]).to(self.device)
         target_pose[:, 2] = to_torch(nut_rand_p[:, 2] + 0.5).to(self.device)
+        # target_pose[:, 2] = to_torch(target_pose[:, 2] - 0.2).to(self.device)
         target_pose[:, 3:7]  = to_torch([0, -1, 0, 0]).to(self.device) #init_pose[:, 3:7]
 
 
-
+        #approach nut 30
+        steps.append(30)
         target_pose2 = target_pose.clone()
-        target_pose2[:, 2] = to_torch(nut_rand_p[:, 2] + 0.2).to(self.device)
+        gripper_h = rand_value[:, 2] + self.part_param['nut_top_length'][env_ids.cpu(), rand_ins_id.cpu()]  * 0.5 + 0.19
+        target_pose2[:, 2] = to_torch(gripper_h).to(self.device)
 
+        #close gripper 10
+        steps.append(10)
         target_pose3 = target_pose2.clone()
-        target_pose3[:, 7:9] = 0.03
 
+        target_pose3[:, 7] = 0.03-to_torch(nut_top_radius)+0.003
+        target_pose3[:, 8] = 0.03-to_torch(nut_top_radius)+0.003
+
+        #move back to prepar pose 40
+        steps.append(60)
         prepar_pose = target_pose3.clone()
         prepar_pose[:, :2] = init_pose[:, :2]
         prepar_pose[:, 2] = prepar_pose[:, 2] + 0.3
 
+        #above fixture 30
+        steps.append(50)
         place1_pose = prepar_pose.clone()
-        place1_pose[:, :2] = fixture_rand_p[:, :2]
-        place1_pose[:, 2] = place1_pose[:, 2] - 0.1
-        # target
+        place1_pose[:, :2] = self.noisy_fixture_pose[env_ids, :2]
+        # place1_pose[:, 0] = fixture_rand_p[:, 0]
+        place1_pose[:, 2] = place1_pose[:, 2] - 0.18
+        
+        # aproach fixture 20
+        steps.append(100)
         place2_pose = place1_pose.clone()
-        place2_pose[:, 2] -= 0.2 
+
+        gripper_h = self.part_param['fixture_outer_height'][env_ids.cpu(), rand_ins_id.cpu()] + 0.195 +0.6
+        place2_pose[:, 2] = to_torch(gripper_h)
+
+        #open gripper 10
+        steps.append(40)
+        place3_pose = place2_pose.clone()
+        place3_pose[:, 7:9] = 0
 
         
-        self.paths =  self.path_generate([init_pose, target_pose, target_pose2, target_pose3, prepar_pose, place1_pose, place2_pose], v_scale=1)
+        self.paths =  self.path_generate([init_pose, target_pose, target_pose2, target_pose3, prepar_pose, place1_pose, place2_pose, place3_pose],given_steps=steps, env_ids=env_ids, paths=self.paths, v_scale=1) #, target_pose, target_pose2, target_pose3, prepar_pose, place1_pose, place2_pose 
+        
+        
+        
+        self.exter_f_pre[env_ids, :] = 0
+        self.reset_buf[env_ids] = 0
+        self.path_step_buf[env_ids] = 0
+        self.progress_buf[env_ids] = 0
+        self.meta_rew_buf[env_ids] = 0
         # for i in range(60):
         #     self.move_to(self.target_pose, gripper="open")
         #     self.render()
@@ -1398,10 +1491,10 @@ class Ur5eAssembly(BaseTask):
         #     self.render()
         #     self.gym.simulate(self.sim)
 
-        print("finish reset")
+        # print("finish reset")
         return target_pose
     
-    def path_generate(self, pose_seq, v_scale = 1.0):
+    def path_generate(self, pose_seq, env_ids, given_steps, paths = None, v_scale = 1.0):
         g_pth = []
         g_steps = []
         per_step = 0.01 * v_scale
@@ -1445,11 +1538,16 @@ class Ur5eAssembly(BaseTask):
             g_steps = np.array((g_norm // g_pre_step + 1))
 
             cat_steps = np.concatenate([pose_steps, orn_steps, g_steps], axis=1)
-            steps = np.max(cat_steps, axis=1).reshape(-1, 1)
+            # steps = np.max(cat_steps, axis=1).reshape(-1, 1)
+            steps = np.ones_like(pose_steps) * given_steps[i-1]
 
-            direct_vec /= norm_scale
+            # direct_vec /= norm_scale
 
-            max_step = int(np.max(steps))
+            max_step =  int(np.max(steps))
+            # if max_step > given_steps[i-1]:
+            #     print("max step larger than given value")
+            #     assert(False)
+            max_step = np.ones_like(max_step) * given_steps[i-1]
             actions_buf = np.zeros([phase_start.shape[0], int(max_step), phase_start.shape[1]])
 
             for n in range(int(max_step)):
@@ -1478,122 +1576,86 @@ class Ur5eAssembly(BaseTask):
 
                 actions_buf[:, n, :] = cur_act_buf
             g_pth.append(actions_buf)
-            print(max_step)
+            # print(max_step)
         total_pth = np.concatenate(g_pth, axis=1)
         total_pth = to_torch(total_pth)
-        return total_pth
+        if paths is not None:
+            paths[env_ids, :, :] = total_pth
+        else:
+            paths = total_pth
+
+        return paths
 
             
-
-            
-
-
-
-         
-
-
-    
     def move_to(self, target_pose, gripper = "open"):
-        self.gym.refresh_jacobian_tensors(self.sim)
-        self.gym.refresh_dof_state_tensor(self.sim)
-        self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.gym.refresh_rigid_body_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.tensor_refresh()
+        break_flag = False
+        if target_pose is None:
+            break_flag = True
+            target_pose = torch.zeros([self.num_envs, 9])
+            return -1
+
+        hand_vel = self.rigid_body_states[self.rg2_indices, 7:]
+        self.control_param['hand_vel'] = hand_vel
 
         des_pos = target_pose[:, :3].to(self.device)
         des_orn = target_pose[:, 3:7].to(self.device)
 
-        self.rigid_body_states = self.rigid_body_states.view(-1, 13)
-        pos_cur = self.rigid_body_states[self.rg2_indices, :3]
-        orn_cur = self.rigid_body_states[self.rg2_indices, 3:7]
-
+       
+        pos_cur = self.robot_state[:, :3].to(self.device)
+        orn_cur = self.robot_state[:, 3:7].to(self.device)
+        orn_cur[torch.where(orn_cur==0)] = 0.00001
+        
         orn_cur /= torch.norm(orn_cur, dim=-1).unsqueeze(-1)
+
         orn_err = orientation_error(des_orn, orn_cur)
         pos_err = des_pos - pos_cur
 
         dpose = torch.cat([pos_err, orn_err], -1).unsqueeze(-1)
-        # dist = torch.norm(dpose, dim=-1).unsqueeze(-1)
+        # dist = torcontrol_oscch.norm(dpose, dim=-1).unsqueeze(-1)
         
         pos_action = self.arm_hand_dof_pos.clone()
-        control_ac = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7], self.device, dpose, self.num_envs)
-        pos_action[:, :7] = self.arm_hand_dof_pos.squeeze(-1)[:, :7] + control_ac
-
         pos_action[:, 7:9] = target_pose[:, 7:9]
-        # if gripper == "open":
-        #     finger_v = 0
-        #     pos_action[:, 7:] = to_torch([finger_v, finger_v]).to(self.device)
-        # elif gripper == "close":
-        #     finger_v = 0.03
-        #     pos_action[:, 7:] = to_torch([finger_v, finger_v]).to(self.device)
- 
-        self.gym.set_dof_position_target_tensor_indexed(self.sim, gymtorch.unwrap_tensor(pos_action),gymtorch.unwrap_tensor(self.hand_indices.to(torch.int32)), self.num_envs)
+        effort_action = torch.zeros_like(pos_action)
+        if self.control_ik:
+            control_ac = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :7], self.device, dpose, self.num_envs)
+            pos_action[:, :7] = self.arm_hand_dof_pos.squeeze(-1)[:, :7] + control_ac
+        else:
+            control_param = self.control_param
+            joint_effort = self.gym.acquire_dof_force_tensor(self.sim)
+            joint_eff_data = gymtorch.wrap_tensor(joint_effort).view(self.num_envs, -1)
+            effort_action[:, :7], _ = control_osc(dpose, control_param, self.num_envs, joint_eff_data, self.device)
+            self.j_eef_inv = _
 
-        # control_max = torch.max(control_ac)
-        # if torch.abs(control_max) < 0.01:
-        #     return True
-        # else:
-        #     return False
-    # def control_gripper(self, action="open"):
-    #     pos_action = self.arm_hand_dof_pos.clone()
-    #     if action == "open":
-    #         finger_v = 1.18
-    #         pos_action[:, 6:] = 
-    #     elif action == "close":
-    #                else:
-    #         assert(False)
-        
-    #     self.gym.set_dof_position_target_tensor_indexed(self.sim, gymtorch.unwrap_tensor(pos_action),gymtorch.unwrap_tensor(self.hand_indices.to(torch.int32)), self.num_envs)
-
-
+        if not break_flag:
+            self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(pos_action))
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(effort_action))
+            
+            self.render()
+            self.gym.simulate(self.sim)
     def pre_physics_step(self, actions):
         
+        self.actions = actions.clone().to(self.device)
         env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
-
         
         if len(env_ids) > 0:
             self.reset_idx(env_ids, goal_env_ids)
+
+        cur_pose = self.robot_state.to(self.device)
+        self.control_pose[:, :3] = self.control_pose[:, :3] + actions * 0.005
+
+        for i in range(8):
+            self.move_to(self.control_pose)              
         
-        # self.gym.refresh_jacobian_tensors(self.sim)
+        grid_count = self.gym.get_env_rigid_body_count(self.env_handles[0])
+        rigid_idx  = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.arm_handles[0], "dh_finger2_link", gymapi.DOMAIN_ENV)
 
-        # des_pos = self.des_pos[self.path_step].to(self.device)
-        # des_orn = self.des_orn[self.path_step].to(self.device)
-
-        # self.rigid_body_states = self.rigid_body_states.view(-1, 13)
-        # pos_cur = self.rigid_body_states[self.rg2_indices, :3]
-        # orn_cur = self.rigid_body_states[self.rg2_indices, 3:7]
-
-        # orn_cur /= torch.norm(orn_cur, dim=-1).unsqueeze(-1)
-        # orn_err = orientation_error(des_orn, orn_cur)
-        # pos_err = des_pos - pos_cur
-
-        # dpose = torch.cat([pos_err, orn_err], -1).unsqueeze(-1)
-
-        
-        # pos_action = self.arm_hand_dof_pos.clone()
-        # control_ac = control_ik(self.jacobian_tensor[:, self.hand_base_rigid_body_index - 1, :, :6], self.device, dpose, self.num_envs)
-        # pos_action[:, :6] = self.arm_hand_dof_pos.squeeze(-1)[:, :6] + control_ac
-
-        # self.gym.set_dof_position_target_tensor_indexed(self.sim, gymtorch.unwrap_tensor(pos_action),gymtorch.unwrap_tensor(self.hand_indices.to(torch.int32)), self.num_envs)
-        # self.control_gripper("open")
-        path_frenq_scale = 10
-        if self.control_step %path_frenq_scale == 0:
-            self.control_step = 0
-            if not self.path_step >= self.paths.shape[1]:
-                tar_pos = self.paths[:, self.path_step]
-                self.path_step += 1
-                self.control_pose = tar_pos
-        self.move_to(self.control_pose)
-        self.control_step += 1            
-
-        # if self.path_step >= self.paths.shape[1]:
-        #     self.path_step = 0
-        self.actions = actions.clone().to(self.device)
-
-        # self.path_step += 1
-        # if self.path_step >= self.path_total_step:
-            # self.path_step = 0
-
+        forces = torch.zeros((self.num_envs, grid_count, 3), device=self.device, dtype=torch.float)
+        torques = torch.zeros((self.num_envs, grid_count, 3), device=self.device, dtype=torch.float)
+        forces[:, rigid_idx, 1] = -10
+        forces[:, rigid_idx, 2] = 10
+      
         ##############################################
         ########       test robot controller  ########
         ##############################################
@@ -1643,20 +1705,263 @@ class Ur5eAssembly(BaseTask):
 
         # self.prev_targets[:, :] = self.cur_targets[:, :]
         # self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.cur_targets))
-    def post_physics_step(self):
+    def post_physics_step(self):        
+        self.compute_observations()
+        self.compute_reward(self.actions)
+        # self.reset_buf = torch.zeros_like(self.reset_buf)
+        self.progress_buf += 1
+        self.randomize_buf += 1
+    def tensor_refresh(self):
         self.gym.refresh_dof_state_tensor(self.sim)
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
-        self.gym.refresh_net_contact_force_tensor(self.sim)
+        # self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_jacobian_tensors(self.sim)
+        # self.gym.refresh_force_sensor_tensor(self.sim)
+        self.gym.refresh_dof_force_tensor(self.sim)
+        self.gym.refresh_mass_matrix_tensors(self.sim)
 
-        self.rigid_body_states = self.rigid_body_states.view(-1, 13)
+
+
+    def compute_observations(self):
+        self.tensor_refresh()
+
+        #********** get the external force useing joint force sensor **************#
+        joint_effort = self.gym.acquire_dof_force_tensor(self.sim)
+        joint_eff_data = gymtorch.wrap_tensor(joint_effort).view(self.num_envs, -1)
+        applied_t = joint_eff_data[:, :7]
+
+        mm = self.control_param['mm']
+        j_eef = self.control_param['j_eef']
+        mm_inv = torch.inverse(mm)
+        m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
+        m_eef = torch.inverse(m_eef_inv)
+        self.j_eef_inv = m_eef @ j_eef @ mm_inv
+        exter_f = self.j_eef_inv@applied_t.view(self.num_envs, -1, 1)
+
+        abs_exter_f = torch.abs(exter_f)
+        low_limit = 5
+        high_limit = 150
+        # exter_f[torch.where(abs_exter_f < low_limit)] = 0
+        # exter_f[torch.where(abs_exter_f > high_limit)] = 0
+
+        # exter_f[torch.where(exter_f > 0 )] -= low_limit
+        # exter_f[torch.where(exter_f < 0 )] += low_limit
+
+        exter_f[:, 0:6] = (1-0.1)*self.exter_f_pre + 0.1* exter_f
+
+        # print(exter_f[4, :3])
+        self.exter_f_pre = exter_f
+        self.obs_buf[:, 0:3] = exter_f.view(self.num_envs, -1)[:, 0:3]
+        self.obs_buf[:, 6:13] = self.gripper_fixture_pose
+        self.obs_buf[:, 13:20] = self.gripper_nut_pose
+        self.states_buf[:, 0:7] = self.gripper_fixture_pose
+        self.states_buf[:, 7:14] = self.gripper_nut_pose
+        self.states_buf[:, 14:21] = self.nut_fixture_pose
+        ####*************************************************************#
         pos_cur = self.rigid_body_states[self.rg2_indices, :3]
         orn_cur = self.rigid_body_states[self.rg2_indices, 3:7]
+        self.robot_state = self.rigid_body_states[self.rg2_indices, :7]
 
-        self.reset_buf = torch.zeros_like(self.reset_buf)
-        self.progress_buf += 1
-        self.randomize_buf += 1
+        path_frenq_scale = 1
+        if self.control_step %path_frenq_scale == 0:
+            self.control_step = 0
+            # self.control_pose = self.next_p
+            id_1 = torch.arange(0, self.paths.shape[0], 1).to(torch.int32)
+            self.path_step_buf[torch.where(self.path_step_buf>=self.paths.shape[1])] -= 1
+            tar_pos = self.paths[id_1, self.path_step_buf]
+            self.path_step_buf += 1
+            self.control_pose = tar_pos
+
+        self.control_step += 1      
+        
+        d_pose = self.control_pose[:, :7] - self.robot_state
+
+        # self.obs_buf[:, 0:6] = self.obs_buf[:, 0:16]
+
+        # next_p = self.next_tar_select(robot_state, self.paths)
+
+        self.obs_buf[:, 3:6] = d_pose[:, :3]
+
+        for i in range(len(self.obs_buf_stack_frames) - 1):
+            self.obs_buf[:, (i+1) * self.one_frame_num_obs:(i+2) * self.one_frame_num_obs] = self.obs_buf_stack_frames[i]
+            self.obs_buf_stack_frames[i] = self.obs_buf[:, (i) * self.one_frame_num_obs:(i+1) * self.one_frame_num_obs].clone()
+
+
+        # self.next_p = next_p
+    def compute_reward(self, actions):
+        self.rew_buf[:] = 0
+        table_height = 0.6
+        #get gripper pose
+        #get nut pose
+        #get fixture pose
+        gripper_pose = self.robot_state
+
+        # actor_root_state_tensor = self.gym.acquire_actor_root_state_tensor(self.sim)
+        # self.root_state_tensor = gymtorch.wrap_tensor(actor_root_state_tensor).view(-1, 13)
+        nut_pose = self.readonly_rootstate_tensor[self.cur_nut_idx, 0:7]
+        # print(nut_pose[4])
+        fixture_pose = self.readonly_rootstate_tensor[self.cur_fixture_idx, 0:7]
+
+        #calc gripper pose on nut  need desered gripper pose on nut
+
+        nut_matrix = self.quat_to_matrix(nut_pose)
+        fixture_matrix = self.quat_to_matrix(fixture_pose)
+        noisy_fixture_matrix = self.quat_to_matrix(self.noisy_fixture_pose)
+        gripper_matrix = self.quat_to_matrix(gripper_pose)
+
+        nut_inv = torch.inverse(nut_matrix)
+        fixture_inv = torch.inverse(fixture_matrix)
+        noisy_fixture_inv = torch.inverse(noisy_fixture_matrix)
+
+        gripper_on_nut = nut_inv @ gripper_matrix
+        nut_on_fixture = fixture_inv @ nut_matrix
+        gripper_on_fixture = noisy_fixture_inv @ gripper_matrix
+
+        gripper_nut_pose = self.matrix_to_quat(gripper_on_nut)
+        nut_fixture_pose = self.matrix_to_quat(nut_on_fixture)
+        noisy_gripper_fixture_pose = self.matrix_to_quat(gripper_on_fixture)
+
+        self.gripper_nut_pose = gripper_nut_pose
+        self.nut_fixture_pose = nut_fixture_pose
+        self.gripper_fixture_pose = noisy_gripper_fixture_pose
+
+        # diff1 = gripper_nut_pose[:, :3] - self.des_gripper_nut[:, :3]
+        # diff1 = torch.norm(diff1, dim=1).to(self.device)
+
+        # diff2 = nut_fixture_pose[:, :3] - self.des_nut_fixture[:, :3]
+        # diff2 = torch.norm(diff2, dim=1).to(self.device)
+
+        # dist_reward = 1 - torch.tanh(10.0 * (diff1 + diff2) / 2)
+
+        action_penalty = torch.sum(actions ** 2, dim=-1)
+
+        nut_height = nut_pose[:, 2] - table_height
+        nut_lifted = (nut_height - to_torch(self.part_nut_bl)) > 0.02
+        lift_reward = nut_lifted
+
+
+        pos_condition = nut_pose[:, :3] - self.des_nut_pose[:, :3]
+        height_condition = nut_pose[:, 2] - self.des_nut_pose[:, 2]
+        nut_on_fixture_pos = (torch.norm(pos_condition, dim=-1) < 0.02)
+        nut_on_fixture_h = torch.abs(height_condition) < 0.005
+        stack_reward = nut_on_fixture_pos & nut_on_fixture_h 
+
+        open_gripper = self.path_step_buf>=self.paths.shape[1]
+        # not_lifted1 = self.path_step_buf>=self.paths.shape[1] *0.5
+        # not_lifted2 = (nut_height - to_torch(self.part_nut_bl)) < 0.02
+
+        rewards = torch.where(stack_reward, self.reward_settings["r_stack_scale"] * stack_reward,
+                    self.reward_settings["action_scale"] * action_penalty + self.reward_settings["r_lift_scale"]*lift_reward
+                    )
+
+
+        force_penalty = torch.norm(self.exter_f_pre, dim=1)
+        self.extras['force'] = force_penalty
+
+        self.rew_buf[:]= rewards #-1 * (self.alpha*diff1 + self.beta*diff2 ) #+ self.gama*force_penalty.view(self.num_envs)
+        
+        # resets = torch.where(diff2 <= 0.01, torch.ones_like(self.reset_buf), self.reset_buf)
+
+        timed_out = self.progress_buf >= self.max_episode_length - 1
+        self.reset_buf = torch.where(timed_out | (stack_reward > 0)|open_gripper , torch.ones_like(self.reset_buf), self.reset_buf)
+
+        self.meta_rew_buf += self.rew_buf[:].clone()
+
+        self.extras['reward'] = self.rew_buf
+        self.extras['meta_reward'] = self.meta_rew_buf
+
+        
+
+        finished_id = torch.where(self.reset_buf > 0)
+        finished_num = finished_id[0].shape[0]
+        finished_reward = self.extras['meta_reward'][finished_id]
+
+        if finished_num > 0:
+            self.finished_num += finished_num
+            self.finished_reward += torch.sum(finished_reward)
+        
+        if self.finished_num > self.num_envs:
+            mean_reward = self.finished_reward / self.finished_num
+            print(mean_reward)
+            self.finished_num = 0
+            self.finished_reward = 0
+
+
+        
+
+        
+        
+
+
+
+        # print(rewards)
+
+
+
+
+        # print(gripper_on_nut[4])
+
+
+        #calc nut pose on fixture need desired nut pose on norm
+        #pul force sensor norm 
+
+    def matrix_to_quat(self, batch_matrix):
+        batch_pose = torch.zeros([batch_matrix.shape[0], 7])
+        batch_pose[:, :3] = batch_matrix[:, :3, 3]
+
+        quat = R.from_matrix(np.array(batch_matrix.cpu())[:, :3, :3])
+        quat = quat.as_quat()
+
+        batch_pose[:, 3:7] = to_torch(quat)
+        return batch_pose.to(self.device)
+
+
+    def quat_to_matrix(self, batch_pose):
+        batch_matrix = torch.eye(4).view(1, 4, 4)
+        batch_matrix = batch_matrix.repeat(batch_pose.shape[0], 1, 1)
+        batch_matrix[:, :3, 3] = batch_pose[:, :3]
+        quat = batch_pose.cpu()[:, 3:7]
+        rot_mat = R.from_quat(np.array(quat))
+        rot_mat = rot_mat.as_matrix()
+        batch_matrix[:, :3, :3] = to_torch(rot_mat)
+
+        return batch_matrix
+
+    def next_tar_select(self, robot_state, paths):
+        dist_thr = 0.01
+        paths_pos = paths[:, :, :3]
+        robot_state = robot_state.view(self.num_envs, 1, -1)
+        reap_robot_state = robot_state.repeat(1, paths.shape[1], 1)
+
+        dist = reap_robot_state - paths_pos
+        dist = torch.norm(dist, dim=2)
+        within_ids = dist < dist_thr
+        within_dist = torch.zeros_like(dist)
+        within_dist[within_ids] = dist[within_ids]
+        min_index = torch.argmin(dist, dim=1)
+        within_dist[:, min_index] = dist[:, min_index]
+
+        id_mask = torch.range(0, within_dist.shape[1]-1, 1).view(1, -1)
+        id_mask = id_mask.repeat(self.num_envs, 1)
+        mask = within_dist == 0
+        id_mask[mask] = 0
+        selected_index = torch.argmax(id_mask, dim=1)
+
+        # selected_index = 
+        row_indx = torch.range(0, self.num_envs-1, 1).to(torch.int32)
+        selected_path_point = paths[row_indx, selected_index, :]
+
+        return selected_path_point
+
+        
+        
+
+
+
+        torch.dist()
+
+
 
 
 # class BlockAssemblySearch(BaseTask):
@@ -3325,3 +3630,63 @@ def control_ik(j_eef, device, dpose, num_envs):
     lmbda = torch.eye(6, device=device) * (damping ** 2)
     u = (j_eef_T @ torch.inverse(j_eef @ j_eef_T + lmbda) @ dpose).view(num_envs, -1)
     return u
+
+def control_osc(dpose, osc_param, num_envs,joint_eff_data, device):
+    kp = osc_param['kp']
+    kd = osc_param['kd']
+    kp_null = osc_param['kp_null']
+    kd_null = osc_param['kd_null']
+    default_dof_pos_tensor = osc_param['default_dof_pos_tensor']
+    mm = osc_param['mm']
+    j_eef = osc_param['j_eef']
+    dof_pos = osc_param['dof_pos']
+    dof_vel = osc_param['dof_vel']
+    hand_vel = osc_param['hand_vel']
+
+    mm_inv = torch.inverse(mm)
+    m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
+    m_eef = torch.inverse(m_eef_inv)
+    control_F = kp * dpose - kd * hand_vel.unsqueeze(-1)
+
+    # print(control_F)
+    F_norm = torch.norm(control_F, dim=1)
+    F_max = 2
+    F_scale = torch.ones_like(F_norm)
+    id = F_norm > F_max
+    F_scale[id] = F_max/F_norm[id]
+    F_scale = F_scale.repeat(1, 6)
+    F_scale = F_scale.view(-1, 6, 1)
+    control_F = control_F * F_scale
+    
+    
+
+    ##############################33extern force#######################################
+    
+    applied_t = joint_eff_data[:, :7]
+
+    mm = osc_param['mm']
+    j_eef = osc_param['j_eef']
+    mm_inv = torch.inverse(mm)
+    m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
+    m_eef = torch.inverse(m_eef_inv)
+    j_eef_inv = m_eef @ j_eef @ mm_inv
+    exter_f =j_eef_inv@applied_t.view(num_envs, -1, 1)
+    
+    # print(exter_f[4])
+
+    limit_id = exter_f[:, 2] > 10
+    control_F[limit_id, 2] = 0
+
+    u = torch.transpose(j_eef, 1, 2) @ m_eef @ (
+        control_F)
+
+    # Nullspace control torques `u_null` prevents large changes in joint configuration
+    # They are added into the nullspace of OSC so that the end effector orientation remains constant
+    # roboticsproceedings.org/rss07/p31.pdf
+    j_eef_inv = m_eef @ j_eef @ mm_inv
+    u_null = kd_null * -dof_vel + kp_null * (
+        (default_dof_pos_tensor.view(1, -1, 1) - dof_pos + np.pi) % (2 * np.pi) - np.pi)
+    u_null = u_null[:, :7]
+    u_null = mm @ u_null
+    u += (torch.eye(7, device=device).unsqueeze(0) - torch.transpose(j_eef, 1, 2) @ j_eef_inv) @ u_null
+    return u.squeeze(-1), j_eef_inv

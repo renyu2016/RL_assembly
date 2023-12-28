@@ -3,7 +3,7 @@ env:
   env_name: "allegro_hand_block_assembly_search"
   numEnvs: 1
   envSpacing: 1.25
-  episodeLength: 75
+  episodeLength: 2000
   handResetStep: 45
   enableDebugVis: False
   enable_camera_sensors: True
@@ -33,7 +33,7 @@ env:
   fallPenalty: 0.0
 
   objectType: "egg" # can be block, egg or pen
-  observationType: "partial_contact" # 
+  observationType: "assembly" # 
   handAgentIndex: "[[0, 1, 2, 3, 4, 5]]"
   asymmetric_observations: True
   successTolerance: 0.1

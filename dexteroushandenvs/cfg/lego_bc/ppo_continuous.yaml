@@ -22,6 +22,8 @@ params:
     mlp:
       units: [512, 256, 128]
       activation: elu
+      d2rl: False
+      
       initializer:
         name: default
       regularizer:
@@ -52,7 +54,7 @@ params:
     clip_value: True
     num_agent: 1
     horizon_length: 8
-    minibatch_size: 1024
+    minibatch_size: 32
     mini_epochs: 5
     critic_coef: 1
     lr_schedule:  adaptive
@@ -77,7 +79,7 @@ params:
       print_stats: False
 
     central_value_config:
-      minibatch_size: 1024
+      minibatch_size: 64
       mini_epochs: 5
       learning_rate: 5e-4
       lr_schedule: adaptive

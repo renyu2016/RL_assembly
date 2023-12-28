@@ -356,6 +356,9 @@
       <inertia ixx="0.46974" ixy="-1.5672E-07" ixz="-0.0002125" iyy="0.72479" iyz="-0.0018639" izz="0.25531"/>
     </inertial> -->
     <visual>
+    <inertial>
+        <density value="1000"/>
+    </inertial>
       <geometry>
         <mesh filename="meshes/xMateER7p/visual/dh300_finger1-2.obj"/>
       </geometry>
@@ -373,6 +376,9 @@
       <inertia ixx="0.46974" ixy="-1.5672E-07" ixz="-0.0002125" iyy="0.72479" iyz="-0.0018639" izz="0.25531"/>
     </inertial> -->
     <visual>
+    <inertial>
+        <density value="1000"/>
+    </inertial>
       <geometry>
         <mesh filename="meshes/xMateER7p/visual/dh300_finger2-2.obj"/>
       </geometry>
@@ -389,7 +395,7 @@
     <origin rpy="0 0 0" xyz="0 0 0.12269"/>
     <axis xyz="-1 0 0"/>
     <dynamics damping="10.0"/>
-    <limit effort="20" lower="0.0" upper="0.04" velocity="0.2"/>
+    <limit effort="200" lower="0.0" upper="0.04" velocity="0.2"/>
     <!-- <mimic joint="panda_finger_joint1"/> -->
   </joint>
   <joint name="finger_joint2" type="prismatic">
@@ -398,7 +404,7 @@
     <origin rpy="0 0 0" xyz="0 0 0.12269"/>
     <axis xyz="1 0 0"/>
     <dynamics damping="10.0"/>
-    <limit effort="20" lower="0.0" upper="0.04" velocity="0.2"/>
+    <limit effort="300" lower="0.0" upper="0.04" velocity="0.01"/>
     <!-- <mimic joint="panda_finger_joint1"/> -->
   </joint>
 
