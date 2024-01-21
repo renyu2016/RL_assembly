@@ -19,14 +19,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.5235987020751401"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.05991183517108124 0.05991183517108124 0.18049597521616648" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.07106022933319493 0.07106022933319493 0.05443311985069603" />
                 </geometry>
                 <material name="yellow"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.5235987020751401"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.05991183517108124 0.05991183517108124 0.18049597521616648"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_top.obj" scale="0.07106022933319493 0.07106022933319493 0.05443311985069603"/>
                 </geometry>
             </collision>
             </link>
@@ -39,14 +39,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076" />
                 </geometry>
                 <material name="yellow"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_bottom.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076"/>
                 </geometry>
             </collision>
             </link>
@@ -59,14 +59,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076" />
                 </geometry>
                 <material name="black"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_plastic.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076"/>
                 </geometry>
             </collision>
             </link>
@@ -79,14 +79,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076" />
                 </geometry>
                 <material name="black"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.042157116738808044 0.042157116738808044 0.025013572568250843"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Screw_oring.obj" scale="0.023643282944720602 0.023643282944720602 0.062463965403822076"/>
                 </geometry>
             </collision>
             </link>

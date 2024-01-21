@@ -29,8 +29,8 @@ params:
       regularizer:
         name: None #'l2_regularizer'
         #scale: 0.001
-  # load_checkpoint: True # flag which sets whether to load the checkpoint
-  # load_path:  /mnt/data/pyCharm-project/Reinforcement_Learning/RL_assembly/dexteroushandenvs/runs/Ur5eAssembly_25-23-20-08/nn/last_Ur5eAssembly_ep_600_rew_249.48956.pth # path to the checkpoint to load
+  load_checkpoint: True # flag which sets whether to load the checkpoint
+  load_path: /mnt/data/pyCharm-project/Reinforcement_Learning/RL_assembly/dexteroushandenvs/runs/Ur5eAssembly_27-14-41-16/nn/last_Ur5eAssembly_ep_8300_rew_6942.613.pth # path to the checkpoint to load
 
 
   config:
@@ -59,7 +59,7 @@ params:
     truncate_grads: True
     e_clip: 0.2
     horizon_length: 8
-    minibatch_size: 1024
+    minibatch_size: 32
     mini_epochs: 5
     critic_coef: 4
     clip_value: True

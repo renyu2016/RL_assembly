@@ -14,14 +14,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.03999468771310285 0.03999468771310285 0.01960414078054761" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.024909341658661228 0.024909341658661228 0.041642256564556834" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.03999468771310285 0.03999468771310285 0.01960414078054761"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_top.obj" scale="0.024909341658661228 0.024909341658661228 0.041642256564556834"/>
                 </geometry>
             </collision>
             </link>
@@ -34,14 +34,14 @@
             <visual>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.04325716030211772 0.04325716030211772 0.01657852833430404" />
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.02561094984458378 0.02561094984458378 0.033937298497499234" />
                 </geometry>
                 <material name="Gray"/>
             </visual>
             <collision>
                 <origin xyz="0 0 0" rpy="0.0 0.0 0.0"/>
                 <geometry>
-                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.04325716030211772 0.04325716030211772 0.01657852833430404"/>
+                <mesh filename="assets/meshes/stutzmontage/visual/Nut_bottom.obj" scale="0.02561094984458378 0.02561094984458378 0.033937298497499234"/>
                 </geometry>
             </collision>
             </link>

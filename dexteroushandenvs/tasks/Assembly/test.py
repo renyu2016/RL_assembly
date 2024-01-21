@@ -24,7 +24,73 @@ import math
 import numpy as np
 import os
 import torch
+import time
+import datetime
 
+def limit_trans_rot(vec, trans_max, rot_max):
+    trans_norm = torch.norm(vec[:,:3], dim=1)
+
+    tre_id = trans_norm > trans_max
+    if torch.sum(tre_id) > 0:
+        temp = (vec[tre_id] / trans_norm.view(num_envs, 1)[tre_id])
+        vec[tre_id] = (vec[tre_id] / trans_norm.view(num_envs, 1)[tre_id]) * trans_max
+
+    rot_norm = torch.norm(vec[:, 3:], dim=1)
+    rre_id = rot_norm > rot_max
+    if torch.sum(rre_id>0):
+        vec[rre_id] = vec[rre_id] / rot_norm.view(num_envs, 1)[rre_id] * rot_max
+    return vec
+    
+    
+    
+    
+    
+
+def control_vel(dpose, dof_state, jobcan,eef_actor_index,rigid_state, rigid_index, massmat, gym, kp, kd, km, period, lower_b, upper_b):
+    pos_state = dof_state[..., 0]
+    vel_state = dof_state[..., 1].view(num_envs, -1, 1)
+
+    j_eef = jobcan[:, eef_actor_index-1, :, :7]
+
+    end_pose = rigid_state[:, rigid_index, :7]
+    end_vel = rigid_state[:, rigid_index, 7:]
+
+    compute_vel = j_eef @ vel_state
+    end_vel = compute_vel.view(num_envs, -1)
+
+    wrench = kp * dpose - kd * end_vel
+
+    a = wrench/km
+
+    a_tran_max = 10
+    a_rot_max = 1
+    v_tran_max = 0.5
+    v_rot_max = 1
+    a = limit_trans_rot(a, a_tran_max, a_rot_max)
+
+    tar_end_vel = end_vel + a*period
+    tar_end_vel = limit_trans_rot(tar_end_vel, v_tran_max, v_rot_max)
+
+    mm = massmat[:, :7, :7]
+    mm_inv = torch.inverse(mm)
+    m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
+    m_eef = torch.inverse(m_eef_inv)
+    j_eef_inv = m_eef @ j_eef @ mm_inv
+
+    joint_vel = torch.transpose(j_eef_inv, 1, 2) @ tar_end_vel.view(num_envs, -1, 1)
+    tar_joint_pos = pos_state + joint_vel.view(num_envs, 7) * period
+
+    upper_check = tar_joint_pos > upper_b[:7]
+    lower_check = tar_joint_pos < lower_b[:7]
+    
+    upper_sum = torch.sum(upper_check, dim=1)
+    lower_sum = torch.sum(lower_check, dim=1) 
+    
+    tar_joint_pos[upper_sum > 0] = pos_state[upper_sum>0]
+    tar_joint_pos[lower_sum>0] = pos_state[lower_sum > 0]
+
+
+    return tar_joint_pos
 
 
 def to_torch(x, dtype=torch.float, device='cuda:0', requires_grad=False):
@@ -114,7 +180,8 @@ gym = gymapi.acquire_gym()
 sim_params = gymapi.SimParams()
 sim_params.up_axis = gymapi.UP_AXIS_Z
 sim_params.gravity = gymapi.Vec3(0.0, 0.0, -9.8)
-sim_params.dt = 1.0 / 10
+control_rate = 100
+sim_params.dt = 1.0 / control_rate
 sim_params.substeps = 2
 physics_engine = gymapi.SIM_PHYSX
 if physics_engine == gymapi.SIM_PHYSX:
@@ -194,16 +261,16 @@ default_dof_state = np.zeros(rokea_num_dofs, gymapi.DofState.dtype)
 default_dof_state["pos"][:7] = np.array([0.0, 0.52, 0.0, 1.04, 0.0, 1.57, 0.261])
 
 # set DOF control properties (except grippers)
-# rokea_dof_props["driveMode"][:7].fill(gymapi.DOF_MODE_POS)
-# rokea_dof_props["stiffness"][:7].fill(0.0)
-# rokea_dof_props["damping"][:7].fill(0.0)
+rokea_dof_props["driveMode"][:7].fill(gymapi.DOF_MODE_POS)
+rokea_dof_props["stiffness"][:7].fill(400.0)
+rokea_dof_props["damping"][:7].fill(40.0)
 
 # # set DOF control properties for grippers
 # rokea_dof_props["driveMode"][7:].fill(gymapi.DOF_MODE_POS)
 # rokea_dof_props["stiffness"][7:].fill(800.0)
 # rokea_dof_props["damping"][7:].fill(40.0)
 
-num_envs = 1
+num_envs = 3
 num_per_row = int(math.sqrt(num_envs))
 spacing = 1.0
 env_lower = gymapi.Vec3(-spacing, -spacing, 0.0)
@@ -221,6 +288,8 @@ hand_idxs = []
 init_pos_list = []
 init_orn_list = []
 hand_indices = []
+
+
 
 for i in range(num_envs):
     # Create env
@@ -253,9 +322,12 @@ for i in range(num_envs):
     # z_indx = gym.find_actor_rigid_body_index(env, mjoint_handle, "z_link", gymapi.DOMAIN_ENV)
     # z_handle = gym.find_actor_rigid_body_handle(env, mjoint_handle, "z_link")
 
-    # arm_idx = gym.get_actor_index(env, mjoint_handle, gymapi.DOMAIN_SIM)
-    # hand_indices.append(arm_idx)
+    arm_idx = gym.get_actor_index(env, rokea_handle, gymapi.DOMAIN_SIM)
+    hand_indices.append(arm_idx)
 grid_count = gym.get_env_rigid_body_count(envs[0])
+
+rokae_body_actor_index = gym.find_actor_rigid_body_index(envs[0], rokea_handle, "dh_gripper_link", gymapi.DOMAIN_ACTOR)
+rokae_end_rigid_index = gym.find_actor_rigid_body_index(env, rokea_handle, "dh_gripper_link", gymapi.DOMAIN_ENV)
 
 # Point camera at middle env
 cam_pos = gymapi.Vec3(4, 3, 3)
@@ -267,11 +339,29 @@ gym.viewer_camera_look_at(viewer, middle_env, cam_pos, cam_target)
 # from now on, we will use the tensor API to access and control the physics simulation
 gym.prepare_sim(sim)
 
+joint_state_tensor = gym.acquire_dof_state_tensor(sim)
+dof_state = gymtorch.wrap_tensor(joint_state_tensor).view(num_envs, -1, 2)[:, :7]
+
+jobcan_matrix_tensor = gym.acquire_jacobian_tensor(sim, "rokea")
+jobcan = gymtorch.wrap_tensor(jobcan_matrix_tensor)
+
+rigid_stae_tensor = gym.acquire_rigid_body_state_tensor(sim)
+rigid_state = gymtorch.wrap_tensor(rigid_stae_tensor).view(num_envs, -1, 13)
+
+_massmatrix = gym.acquire_mass_matrix_tensor(sim, "rokea")
+mm = gymtorch.wrap_tensor(_massmatrix)
+
+prev_targets = torch.zeros((num_envs, rokea_num_dofs), dtype=torch.float, device=device)
+
 hand_indices = to_torch(hand_indices, dtype=torch.int32, device=device)
 
 force = gymapi.Vec3(0, 0, 1000.0)
 torque_amt = 100
 itr = 0
+
+last_time = time.time()
+cur_time = time.time()
+period = 1/control_rate
 while not gym.query_viewer_has_closed(viewer):
 
     # Randomize desired hand orientations
@@ -295,6 +385,36 @@ while not gym.query_viewer_has_closed(viewer):
     gym.refresh_jacobian_tensors(sim)
     gym.refresh_mass_matrix_tensors(sim)
     gym.refresh_dof_force_tensor(sim)
+
+    dpose = to_torch(torch.zeros([num_envs, 6]))
+    dpose[1, 0] = -0.1
+    dpose[1, 1] = -0.1
+    dpose[1, 2] = -0.05
+    dpose[1, 4] = 0
+
+    dpose[2, 0] = 0.1
+    dpose[2, 1] = 0.1
+    dpose[2, 2] = 0.05
+    dpose[2, 4] = 0
+    param_kp= 200
+    param_kd = np.sqrt(param_kp)
+    upper_limits = to_torch(rokea_upper_limits)
+    lower_limits = to_torch(rokea_lower_limits)
+    tar_pos = control_vel(dpose, dof_state=dof_state, jobcan=jobcan, eef_actor_index=rokae_body_actor_index,
+                rigid_state=rigid_state,rigid_index=rokae_end_rigid_index, gym=gym, massmat=mm, kp = 200, kd= param_kd, km=2,
+                period=period, upper_b=upper_limits, lower_b=lower_limits)
+    prev_targets[:, :7] = tar_pos
+    prev_targets[:, 7:] = 0.03
+    gym.set_dof_position_target_tensor_indexed(sim,
+                                            gymtorch.unwrap_tensor(prev_targets),
+                                            gymtorch.unwrap_tensor(hand_indices), num_envs)
+
+
+    
+    while cur_time < last_time + period:
+        cur_time = time.time()
+    print(cur_time)
+    last_time = cur_time
 
     # targets = torch.ones((num_envs, 1), dtype=torch.float, device=device) * 0.05
     # gym.set_dof_actuation_force_tensor(sim, gymtorch.unwrap_tensor(targets))
@@ -336,3 +456,6 @@ while not gym.query_viewer_has_closed(viewer):
 # target_pose[:, 3:7]  = to_torch([0, 0, 0, 1]).to(device) #init_pose[:, 3:7]
 
 # path_generate([init_pose, target_pose, target_pose2])
+    
+
+

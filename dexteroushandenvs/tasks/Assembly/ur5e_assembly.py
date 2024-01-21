@@ -1422,7 +1422,9 @@ class Ur5eAssembly(BaseTask):
         init_pose = rg2_state[:, :9].to(self.device)
         steps = []
         #above nut 40
+        self.grasp_steps = 0
         steps.append(50)
+        self.grasp_steps += 50
         target_pose = torch.zeros([len(env_ids), 9]).to(self.device)
         target_pose[:, :3] = init_pose[:, :3].clone()
         target_pose[:, 0] = to_torch(nut_rand_p[:, 0]).to(self.device)
@@ -1434,12 +1436,14 @@ class Ur5eAssembly(BaseTask):
 
         #approach nut 30
         steps.append(30)
+        self.grasp_steps += 30
         target_pose2 = target_pose.clone()
         gripper_h = rand_value[:, 2] + self.part_param['nut_top_length'][env_ids.cpu(), rand_ins_id.cpu()]  * 0.5 + 0.19
         target_pose2[:, 2] = to_torch(gripper_h).to(self.device)
 
         #close gripper 10
         steps.append(10)
+        self.grasp_steps += 10
         target_pose3 = target_pose2.clone()
 
         target_pose3[:, 7] = 0.03-to_torch(nut_top_radius)+0.003
@@ -1447,6 +1451,7 @@ class Ur5eAssembly(BaseTask):
 
         #move back to prepar pose 40
         steps.append(60)
+        self.grasp_steps += 60
         prepar_pose = target_pose3.clone()
         prepar_pose[:, :2] = init_pose[:, :2]
         prepar_pose[:, 2] = prepar_pose[:, 2] + 0.3
@@ -1456,7 +1461,8 @@ class Ur5eAssembly(BaseTask):
         place1_pose = prepar_pose.clone()
         place1_pose[:, :2] = self.noisy_fixture_pose[env_ids, :2]
         # place1_pose[:, 0] = fixture_rand_p[:, 0]
-        place1_pose[:, 2] = place1_pose[:, 2] - 0.18
+        p_h = self.part_param['fixture_outer_height'][env_ids.cpu(), rand_ins_id.cpu()] + 0.195 +0.6 + self.part_param['nut_bottom_length'][env_ids.cpu(), rand_ins_id.cpu()] + self.part_param['nut_top_length'][env_ids.cpu(), rand_ins_id.cpu()]
+        place1_pose[:, 2] = to_torch(p_h)
         
         # aproach fixture 20
         steps.append(100)
@@ -1643,18 +1649,23 @@ class Ur5eAssembly(BaseTask):
             self.reset_idx(env_ids, goal_env_ids)
 
         cur_pose = self.robot_state.to(self.device)
-        self.control_pose[:, :3] = self.control_pose[:, :3] + actions * 0.005
+        self.control_pose[:, :3] = self.control_pose[:, :3]# + actions * 0.005
 
-        for i in range(8):
-            self.move_to(self.control_pose)              
-        
         grid_count = self.gym.get_env_rigid_body_count(self.env_handles[0])
-        rigid_idx  = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.arm_handles[0], "dh_finger2_link", gymapi.DOMAIN_ENV)
+        rigid_idx  = self.gym.find_actor_rigid_body_index(self.env_handles[0], self.arm_handles[0], "dh_gripper_link", gymapi.DOMAIN_ENV)
 
         forces = torch.zeros((self.num_envs, grid_count, 3), device=self.device, dtype=torch.float)
         torques = torch.zeros((self.num_envs, grid_count, 3), device=self.device, dtype=torch.float)
-        forces[:, rigid_idx, 1] = -10
-        forces[:, rigid_idx, 2] = 10
+        # forces[:, rigid_idx, 1] = 0
+        forces[:, rigid_idx, 1] = 2
+        
+        for i in range(8):
+            # self.gym.apply_rigid_body_force_tensors(self.sim, gymtorch.unwrap_tensor(forces), gymtorch.unwrap_tensor(torques), gymapi.GLOBAL_SPACE)
+            self.move_to(self.control_pose)              
+        
+
+
+        
       
         ##############################################
         ########       test robot controller  ########
@@ -1737,7 +1748,7 @@ class Ur5eAssembly(BaseTask):
         m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
         m_eef = torch.inverse(m_eef_inv)
         self.j_eef_inv = m_eef @ j_eef @ mm_inv
-        exter_f = self.j_eef_inv@applied_t.view(self.num_envs, -1, 1)
+        exter_f = self.j_eef_inv @ applied_t.view(self.num_envs, -1, 1)
 
         abs_exter_f = torch.abs(exter_f)
         low_limit = 5
@@ -1750,7 +1761,7 @@ class Ur5eAssembly(BaseTask):
 
         exter_f[:, 0:6] = (1-0.1)*self.exter_f_pre + 0.1* exter_f
 
-        # print(exter_f[4, :3])
+        print(exter_f[4, :3])
         self.exter_f_pre = exter_f
         self.obs_buf[:, 0:3] = exter_f.view(self.num_envs, -1)[:, 0:3]
         self.obs_buf[:, 6:13] = self.gripper_fixture_pose
@@ -1863,8 +1874,11 @@ class Ur5eAssembly(BaseTask):
         
         # resets = torch.where(diff2 <= 0.01, torch.ones_like(self.reset_buf), self.reset_buf)
 
-        timed_out = self.progress_buf >= self.max_episode_length - 1
-        self.reset_buf = torch.where(timed_out | (stack_reward > 0)|open_gripper , torch.ones_like(self.reset_buf), self.reset_buf)
+        timed_out = self.progress_buf >= (self.max_episode_length - 1)
+        grasp_time = self.progress_buf >= self.grasp_steps
+        unlifted = lift_reward == 0
+        failed_lift = grasp_time & unlifted
+        self.reset_buf = torch.where(timed_out | (stack_reward > 0)|open_gripper |failed_lift, torch.ones_like(self.reset_buf), self.reset_buf)
 
         self.meta_rew_buf += self.rew_buf[:].clone()
 
@@ -3631,6 +3645,13 @@ def control_ik(j_eef, device, dpose, num_envs):
     u = (j_eef_T @ torch.inverse(j_eef @ j_eef_T + lmbda) @ dpose).view(num_envs, -1)
     return u
 
+# def control_vel()
+
+
+
+
+
+
 def control_osc(dpose, osc_param, num_envs,joint_eff_data, device):
     kp = osc_param['kp']
     kd = osc_param['kd']
@@ -3670,13 +3691,13 @@ def control_osc(dpose, osc_param, num_envs,joint_eff_data, device):
     m_eef_inv = j_eef @ mm_inv @ torch.transpose(j_eef, 1, 2)
     m_eef = torch.inverse(m_eef_inv)
     j_eef_inv = m_eef @ j_eef @ mm_inv
-    exter_f =j_eef_inv@applied_t.view(num_envs, -1, 1)
-    
+    exter_f =j_eef_inv @ applied_t.view(num_envs, -1, 1)
+    # print(exter_f[4, :3])
     # print(exter_f[4])
 
-    limit_id = exter_f[:, 2] > 10
+    limit_id = exter_f[:, 2] > 5
     control_F[limit_id, 2] = 0
-
+    # 
     u = torch.transpose(j_eef, 1, 2) @ m_eef @ (
         control_F)
 
